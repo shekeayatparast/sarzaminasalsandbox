@@ -352,3 +352,55 @@ Stage Summary:
 - Bot is now resilient: 409 conflicts auto-retry, SQLITE_BUSY auto-retries, network errors auto-retry. The admin will never see a "dead bot" again.
 - Auto-redirect to cart (user request B): verified working. Customer clicks "افزودن به سبد و ادامه" → immediately taken to cart to finalize payment.
 - Bot is live at @MeowAboosBot, port 3003, polling=true, WAL mode active, all systems healthy.
+
+---
+Task ID: fix-8
+Agent: main (orchestrator)
+Task: Comprehensive bot testing — test every option, fix all bugs, ensure zero issues
+
+Work Log:
+- Read all bot source files (index.ts, handlers.ts, db.ts, config.ts, messages.ts, keyboards.ts, format.ts) + prisma schema + site's notify-bot.ts + db.ts.
+- Discovered the bot was stuck in a 409 Conflict loop (725+ polling crashes). Root cause: ANOTHER bot instance is polling the same Telegram token from a different server. Manual getUpdates test confirmed: timeout=0 succeeds, but timeout≥2 gets 409 persistently.
+- REWROTE index.ts polling from scratch:
+  • Replaced grammy's bot.start() + watchdog with a CUSTOM polling loop using bot.api.getUpdates() directly.
+  • Added ADAPTIVE polling: tries long-poll (timeout=30) first, on 409 falls back to short-poll (timeout=0, 2s interval).
+  • Short-poll mode works despite the competing instance (timeout=0 doesn't conflict with in-flight long-polls).
+  • Every 60s in short-poll mode, retries long-poll to detect when the conflict clears.
+  • Proper offset tracking (lastUpdateId) — no duplicate or missed updates.
+  • Health endpoint now includes crashCount + lastPollAt for monitoring.
+- Wrote comprehensive test suite (test-handlers.ts) — 66 tests covering EVERY handler:
+  • /start, /help, back, stats, search
+  • today:0, verify:0, new:0, all:0 (order lists)
+  • status filter menu + st:<status>:0
+  • o:<order> (details), o:INVALID (not found)
+  • os:<order> (status menu)
+  • oss:<order>:<status> (THE CRITICAL ONE — all 7 statuses tested: awaiting_payment, paid, confirmed, preparing, shipped, delivered, cancelled)
+  • oss:INVALID:paid, oss:<order>:BADSTATUS (error cases)
+  • Status invariant verified: orderStatus ↔ paymentStatus always consistent
+  • ocancel:<order> (cancel confirmation)
+  • cust:0, c:<phone>, c:INVALID, corders:<phone>
+  • p:0, pd:<slug>, pd:invalid-slug
+  • pe:<slug>, pdesc:<slug>, pf:<slug> (product management)
+  • Text search: order number, phone, nonexistent, Persian digits
+  • Price edit flow: valid price, negative (-100), too large (9999999999)
+  • Desc edit flow: valid description
+  • State-clearing: edit_desc → navigate → text=SEARCH (not desc edit)
+  • State-clearing: edit_price → navigate → text=SEARCH (not price edit)
+  • Edit flow still works when NOT interrupted
+
+- BUGS FOUND AND FIXED:
+  1. **Price parsing bug (CRITICAL)**: handleTextMessage used `parseInt(text.replace(/[^\d]/g, ""))` which STRIPPED the minus sign, turning "-100" into "100" (a valid positive price!). An admin accidentally typing "-100" would set the product price to 100 toman instead of rejecting it. FIX: now requires input to be purely digits after whitespace removal (`/^\d+$/` test). Rejects negatives, decimals, commas, and any non-digit characters.
+  2. **State persistence bug (CRITICAL)**: userState (edit_price/edit_desc) persisted across navigation. If admin clicked "edit description" then navigated elsewhere (e.g., clicked "product details" or "back"), the state was NOT cleared. The next text message would be misinterpreted as a description/price edit for the OLD product. FIX: answerCallbacks middleware now calls clearState() on EVERY callback query. Handlers that start a flow (handleProductEditPrice, handleProductEditDesc) re-set the state AFTER the middleware clears it.
+  3. **Restored corrupted data**: The price parsing bug had set gon product price to 100 toman (from a previous test run with "-100"). Restored to 1,400,000. Also restored gon description (was corrupted to an 8-char order number).
+
+- Verified notification flow end-to-end:
+  • POST /notify/new-order → bot sends "🆕 سفارش جدید ثبت شد!" to admin ✅
+  • POST /notify/payment-confirmed → bot sends "💳 مشتری پرداخت را تأیید کرد!" to admin ✅
+
+- All 66 tests pass. Bot is running on port 3003, polling in short-poll mode (due to competing instance on another server).
+
+Stage Summary:
+- ROOT CAUSE of original error "❌ خطا در به‌روزرسانی وضعیت سفارش": The bot's polling was dead (stuck in 409 Conflict loop from competing instance), so admin's button clicks were never received. Combined with the 2 handler bugs (price parsing, state persistence), the bot was unreliable.
+- FIXES: (1) Custom adaptive polling loop with 409 short-poll fallback — bot works even with a competing instance. (2) Price parsing now rejects negative/non-digit input. (3) State clears on every button click — no more misinterpreted text messages. (4) Comprehensive test suite (66 tests) ensures all handlers work correctly.
+- KNOWN ISSUE: Another bot instance is polling the same token from a different server. This bot uses short-poll mode (timeout=0) as a fallback, which works but is less efficient. The admin should stop the other instance for optimal performance. When the other instance stops, this bot will automatically switch back to long-poll mode within 60 seconds.
+- ALL 66 HANDLER TESTS PASS. Bot is live, healthy, and all handlers verified working.

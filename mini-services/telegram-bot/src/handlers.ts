@@ -112,12 +112,21 @@ export async function accessControl(ctx: Context, next: () => Promise<void>) {
   return next();
 }
 
-// Auto-answer callback queries to remove loading spinner
+// Auto-answer callback queries to remove loading spinner.
+// ALSO: clear any pending multi-step flow state (edit_price / edit_desc) on
+// every button click. This prevents a stale state from causing the admin's next
+// text message to be misinterpreted as a price/desc edit for the OLD product.
+// (Handlers that START a flow — handleProductEditPrice, handleProductEditDesc —
+// re-set the state AFTER this middleware clears it, so the flow still works.)
 export async function answerCallbacks(ctx: Context, next: () => Promise<void>) {
   if (ctx.callbackQuery) {
     try {
       await ctx.answerCallbackQuery();
     } catch {}
+    // Clear any pending edit flow — the admin clicked a button, so they're
+    // navigating away from the text-input flow. If they clicked "edit price"
+    // or "edit desc", the handler will re-set the state after this clears it.
+    if (ctx.from) clearState(ctx.from.id);
   }
   return next();
 }
@@ -609,7 +618,20 @@ export async function handleTextMessage(ctx: Context) {
   const state = userState.get(userId);
   if (state && state.action === "edit_price") {
     clearState(userId);
-    const price = parseInt(toAsciiDigits(text).replace(/[^\d]/g, ""), 10);
+    // Convert Persian/Arabic digits to ASCII, then validate.
+    // IMPORTANT: We must reject negative numbers, decimals, and any non-digit
+    // characters. The old code used .replace(/[^\d]/g, "") which STRIPPED
+    // the minus sign, turning "-100" into "100" (a valid positive price!).
+    // Now we require the input to be purely digits (after whitespace removal).
+    const asciiText = toAsciiDigits(text).replace(/\s/g, "");
+    if (!/^\d+$/.test(asciiText)) {
+      await ctx.reply(
+        "❌ قیمت نامعتبر است. لطفاً یک عدد صحیح مثبت وارد کنید (فقط ارقام، بدون علامت یا کاما).",
+        { reply_markup: productActionsKb(state.slug), parse_mode: "HTML" }
+      );
+      return;
+    }
+    const price = parseInt(asciiText, 10);
     if (isNaN(price) || price <= 0) {
       await ctx.reply(
         "❌ قیمت نامعتبر است. لطفاً یک عدد صحیح مثبت وارد کنید.",
