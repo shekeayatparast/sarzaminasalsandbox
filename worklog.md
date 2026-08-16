@@ -481,3 +481,67 @@ Stage Summary:
 - NOTE: A test tracking code "12345678901234" was set on HN-14704 (delivered) for demonstration purposes. The user can remove it or set real tracking codes via the bot's "📮 تحویل به پست" button.
 - Bot is live at @MeowAboosBot, port 3003, polling=true (short-poll mode due to competing instance).
 - Site is live on port 3000, status 200.
+
+---
+Task ID: fix-10
+Agent: main (orchestrator)
+Task: New bot token + comprehensive project review and bug fix — find ALL bugs/issues, list them, fix all of them
+
+Work Log:
+- Updated bot token from old (8902705780:AAH-QYYTwapcjOa971MUx1KFmR5mlIMa7jg — REVOKED) to new (8902705780:AAFGE0CuGGvyXYDT2yQRHME6iKB4sdXG3pQ). Updated in both config.ts AND .env file (the .env was overriding the config).
+
+- COMPREHENSIVE PROJECT REVIEW — read ALL source files (bot: index.ts, handlers.ts, db.ts, config.ts, messages.ts, format.ts, keyboards.ts; site: all API routes, all components, lib files, prisma schema). Identified 7 bugs/issues:
+
+  BUG #1 (CRITICAL): generateOrderNumber collision retry never regenerates.
+    - In /api/orders/route.ts, the while loop checked for collision but NEVER regenerated orderNumber. A collision would loop 5x checking the SAME number, then attempt create → unique constraint violation → 500 error.
+    - FIX: Now regenerates a NEW orderNumber inside the loop on each collision.
+
+  BUG #2-3 (UX GAP): No "edit tracking code" capability + already-shipped orders block tracking code entry.
+    - Once a tracking code was set, admin couldn't fix a typo without reverting order to "preparing". If shipped via "skip" (no code), admin couldn't add code later (early-return blocked re-entering the flow).
+    - FIX: Added new "📝 ویرایش کد رهگیری" / "📮 افزودن کد رهگیری" button to orderActionsKb (shown only for shipped/delivered orders). New handler handleEditTrackingCode (callback pattern oetrack:<orderNumber>) enters the enter_tracking state with isEdit=true flag. Updated handleTextMessage to handle the isEdit case: only updates trackingCode, does NOT change orderStatus. Added 3rd parameter hasTrackingCode to orderActionsKb. Updated all 5 callers to pass the flag.
+
+  BUG #4 (MINOR): Stats emoji inconsistency.
+    - messages.ts statsMessage used "🚚 ارسال شده به پست" (truck) but rest of codebase uses "📮" (postbox) for shipped.
+    - FIX: Changed to "📮 تحویل به پست".
+
+  BUG #5 (ROBUSTNESS): Product edits didn't use withRetry.
+    - handleProductToggleFeatured, price edit (text handler), desc edit (text handler) wrapped DB writes directly without withRetry. Could fail under DB contention (unlike order status updates which do use withRetry).
+    - FIX: Wrapped all product findUnique + update calls in withRetry with appropriate labels and retry settings (maxRetries=5, baseDelayMs=300).
+
+  BUG #6 (EDGE CASE): handleSkipTrackingCode didn't guard against already-delivered orders.
+    - If somehow triggered on a delivered order (e.g., stale button), it would reset the order back to "shipped" and clear the tracking code.
+    - FIX: Added guards: (1) if order is delivered/cancelled, reject with "cannot" message. (2) if already shipped WITH a tracking code, reject and point to the edit button.
+
+  BUG #7 (SECURITY): No quantity validation in order creation API.
+    - body.items quantity wasn't validated as positive integer. A malicious client could send quantity=0 or negative.
+    - FIX: Added validation: quantity must be integer 1..99, containerSize must be positive number 1..100.
+
+  BONUS FIX: Next.js Image warning — logo.png Image components with `fill` were missing `sizes` prop. Added sizes="56px"/"44px"/"48px" to Header (2 instances) and Footer (1 instance). Console warnings now clean.
+
+- TESTING:
+  • Added 6 new tests to test-handlers.ts (14l through 14p):
+    - 14l: oetrack on shipped order shows edit prompt with current code
+    - 14m: oetrack + text updates ONLY trackingCode (status stays shipped)
+    - 14n: oetrack on delivered order allows edit (status stays delivered)
+    - 14o: oetrack on non-shipped order rejects (state NOT set)
+    - 14p: ossk on delivered order — guard prevents regression to shipped
+  • ALL 104 TESTS PASS (was 88, +16 new assertions across 6 new tests).
+
+- END-TO-END VERIFICATION (Agent Browser + live API):
+  • Site loads clean (status 200, no console errors/warnings).
+  • About Us page: "برداشت مستقیم از زنبورستان‌ها" confirmed GONE. Benefits list has 5 items.
+  • Add-to-cart redirect: Clicked "افزودن" → dialog → "افزودن به سبد و ادامه" → auto-navigated to cart showing 1 item + toast.
+  • Track orders page: Searched HN-14704 (delivered, tracking code 12345678901234) → tracking code section shown with blue card, code in Persian digits, "پیگیری در سامانه پست" button links to https://tracking.post.ir/.
+  • Quantity validation: Tested quantity=0 and quantity=-5 → both rejected with "تعداد سفارش نامعتبر است".
+  • Full order lifecycle: Created HN-65950 via API → bot received "📨 New order notification" → customer confirmed payment via /api/orders/confirm → bot received "💳 Payment confirmed notification" → admin (live, via bot) clicked "✅ تأیید پرداخت" → bot logged "📊 Status change: HN-65950 paid → confirmed" → site tracking page shows updated status.
+  • Lint: 0 errors, 0 warnings.
+
+- BOT HEALTH: @MeowAboosBot running on port 3003, polling=true (long-poll mode, NO 409 conflicts — old token revoked so no competing instance), uptime 280+s, crashCount=0.
+
+Stage Summary:
+- NEW TOKEN: Bot running with new token 8902705780:AAFGE0CuGGvyXYDT2yQRHME6iKB4sdXG3pQ. Old token revoked = no competing instance = clean long-poll polling.
+- 7 BUGS FOUND AND FIXED: (1) order number collision retry never regenerated [CRITICAL], (2-3) no edit-tracking-code capability [UX], (4) stats emoji mismatch, (5) product edits missing withRetry, (6) skip-tracking guard missing, (7) no quantity validation [SECURITY]. Plus bonus: Image sizes prop warning fixed.
+- 104 handler tests pass (6 new tests for edit-tracking-code flow + skip guard).
+- Admin is actively testing the bot right now — successfully changed HN-65950 from paid → confirmed via the bot's "✅ تأیید پرداخت" button.
+- Full bidirectional sync verified: site → bot (order + payment notifications), bot → site (status changes reflected on tracking page via 15s auto-poll).
+- Bot is live at @MeowAboosBot, port 3003, all systems healthy. Site live on port 3000, lint clean, no console warnings.

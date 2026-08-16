@@ -2,7 +2,7 @@
 
 export const BOT_TOKEN =
   process.env.TELEGRAM_BOT_TOKEN ||
-  "8902705780:AAH-QYYTwapcjOa971MUx1KFmR5mlIMa7jg";
+  "8902705780:AAFGE0CuGGvyXYDT2yQRHME6iKB4sdXG3pQ";
 
 // Telegram numeric ID of the admin (sales manager)
 export const ADMIN_ID = Number(

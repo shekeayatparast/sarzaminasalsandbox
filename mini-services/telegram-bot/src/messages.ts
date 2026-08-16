@@ -170,7 +170,7 @@ export async function statsMessage(): Promise<string> {
     `• 💳 پرداخت ثبت شد: <b>${toPersianDigits(paidCount)}</b>\n` +
     `• ✅ تأیید مدیریت: <b>${toPersianDigits(confirmedCount)}</b>\n` +
     `• 📦 در حال آماده‌سازی: <b>${toPersianDigits(preparingCount)}</b>\n` +
-    `• 🚚 ارسال شده به پست: <b>${toPersianDigits(shippedCount)}</b>\n` +
+    `• 📮 تحویل به پست: <b>${toPersianDigits(shippedCount)}</b>\n` +
     `• 🏁 تحویل شده: <b>${toPersianDigits(deliveredCount)}</b>\n` +
     `• ❌ لغو شده: <b>${toPersianDigits(cancelledCount)}</b>\n\n`;
 

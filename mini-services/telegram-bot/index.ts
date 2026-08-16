@@ -23,6 +23,7 @@ import {
   handleOrderStatusMenu,
   handleSetOrderStatus,
   handleSkipTrackingCode,
+  handleEditTrackingCode,
   handleCancelOrder,
   handleCustomers,
   handleCustomerDetails,
@@ -78,6 +79,7 @@ bot.callbackQuery(/^o:(.+)$/, handleOrderDetails);
 bot.callbackQuery(/^os:(.+)$/, handleOrderStatusMenu);
 bot.callbackQuery(/^oss:([^:]+):(.+)$/, handleSetOrderStatus);
 bot.callbackQuery(/^ossk:([^:]+)$/, handleSkipTrackingCode);
+bot.callbackQuery(/^oetrack:([^:]+)$/, handleEditTrackingCode);
 bot.callbackQuery(/^ocancel:(.+)$/, handleCancelOrder);
 
 // Callback queries — customers

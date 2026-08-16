@@ -58,6 +58,7 @@ export function Header() {
                 src="/images/logo.png"
                 alt="لوگوی سرزمین عسل"
                 fill
+                sizes="56px"
                 className="object-contain drop-shadow-sm"
                 priority
               />
@@ -130,6 +131,7 @@ export function Header() {
                         src="/images/logo.png"
                         alt="لوگوی سرزمین عسل"
                         fill
+                        sizes="44px"
                         className="object-contain"
                       />
                     </div>

@@ -55,7 +55,7 @@ const PAGE_SIZE = 5;
 type UserState =
   | { action: "edit_price"; slug: string }
   | { action: "edit_desc"; slug: string }
-  | { action: "enter_tracking"; orderNumber: string };
+  | { action: "enter_tracking"; orderNumber: string; isEdit?: boolean };
 
 const userState = new Map<number, UserState>();
 
@@ -299,14 +299,18 @@ export async function handleOrderDetails(ctx: Context) {
   } catch {}
   const order = await db.order.findUnique({
     where: { orderNumber },
-    select: { orderStatus: true },
+    select: { orderStatus: true, trackingCode: true },
   });
   const text = await orderDetailsMessage(orderNumber);
   if (!text) {
     await show(ctx, "❌ سفارش یافت نشد.", backKb());
     return;
   }
-  await show(ctx, text, orderActionsKb(orderNumber, order?.orderStatus || ""));
+  await show(
+    ctx,
+    text,
+    orderActionsKb(orderNumber, order?.orderStatus || "", !!order?.trackingCode)
+  );
 }
 
 // ── Order status change menu ─────────────────────────────────────────
@@ -372,7 +376,11 @@ export async function handleSetOrderStatus(ctx: Context) {
     // If status hasn't changed, no-op (avoid unnecessary writes)
     if (order.orderStatus === status) {
       const text = await orderDetailsMessage(orderNumber);
-      await show(ctx, `ℹ️ وضعیت سفارش از قبل «${statusLabel(status)}» بود.\n\n${text || ""}`, orderActionsKb(orderNumber, status));
+      await show(
+        ctx,
+        `ℹ️ وضعیت سفارش از قبل «${statusLabel(status)}» بود.\n\n${text || ""}`,
+        orderActionsKb(orderNumber, status, !!order.trackingCode)
+      );
       return;
     }
 
@@ -447,7 +455,7 @@ export async function handleSetOrderStatus(ctx: Context) {
       `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
       `📊 وضعیت جدید: ${statusLabel(status)}\n\n` +
       (text || "");
-    await show(ctx, msg, orderActionsKb(orderNumber, status));
+    await show(ctx, msg, orderActionsKb(orderNumber, status, false));
   } catch (e: any) {
     // Log the FULL error details so we can diagnose the root cause
     const errCode = e?.code || e?.errno || "N/A";
@@ -473,6 +481,8 @@ export async function handleSetOrderStatus(ctx: Context) {
 // ── Skip tracking code ───────────────────────────────────────────────
 // Called when the admin taps "بدون کد رهگیری" in the tracking-entry prompt.
 // Updates the order to "shipped" with trackingCode = null.
+// GUARD: Only allow if the order is NOT already delivered/cancelled — we don't
+// want to accidentally regress a delivered order back to "shipped".
 export async function handleSkipTrackingCode(ctx: Context) {
   // pattern: ossk:<orderNumber>
   const orderNumber = cbData(ctx).split(":")[1];
@@ -484,12 +494,34 @@ export async function handleSkipTrackingCode(ctx: Context) {
     const order = await withRetry(
       () => db.order.findUnique({
         where: { orderNumber },
-        select: { id: true, customerName: true, orderStatus: true },
+        select: { id: true, customerName: true, orderStatus: true, trackingCode: true },
       }),
       { label: `findOrderSkip(${orderNumber})` }
     );
     if (!order) {
       await show(ctx, "❌ سفارش یافت نشد.", backKb());
+      return;
+    }
+
+    // Guard: don't regress delivered/cancelled orders
+    if (order.orderStatus === "delivered" || order.orderStatus === "cancelled") {
+      const text = await orderDetailsMessage(orderNumber);
+      await show(
+        ctx,
+        `⚠️ این سفارش در وضعیت «${statusLabel(order.orderStatus)}» است و نمی‌توان آن را به پست تحویل داد.\n\n${text || ""}`,
+        orderActionsKb(orderNumber, order.orderStatus, !!order.trackingCode)
+      );
+      return;
+    }
+
+    // If already shipped with a tracking code, don't clear it via skip
+    if (order.orderStatus === "shipped" && order.trackingCode) {
+      const text = await orderDetailsMessage(orderNumber);
+      await show(
+        ctx,
+        `ℹ️ این سفارش قبلاً با کد رهگیری ثبت شده است. برای تغییر کد، از دکمه «📝 ویرایش کد رهگیری» استفاده کنید.\n\n${text || ""}`,
+        orderActionsKb(orderNumber, "shipped", true)
+      );
       return;
     }
 
@@ -516,7 +548,7 @@ export async function handleSkipTrackingCode(ctx: Context) {
       `📊 وضعیت جدید: ${statusLabel("shipped")}\n` +
       `⚠️ بدون کد رهگیری — مشتری نمی‌تواند بسته را در سامانه پست پیگیری کند.\n\n` +
       (text || "");
-    await show(ctx, msg, orderActionsKb(orderNumber, "shipped"));
+    await show(ctx, msg, orderActionsKb(orderNumber, "shipped", false));
   } catch (e: any) {
     const errCode = e?.code || e?.errno || "N/A";
     const errMsg = String(e?.message || e).slice(0, 300);
@@ -532,6 +564,79 @@ export async function handleSkipTrackingCode(ctx: Context) {
         `لطفاً دوباره تلاش کنید.`,
       backKb()
     );
+  }
+}
+
+// ── Edit tracking code ───────────────────────────────────────────────
+// Called when the admin taps "📝 ویرایش کد رهگیری" or "📮 افزودن کد رهگیری"
+// on a shipped/delivered order. Enters the enter_tracking state so the next
+// text message from the admin will be treated as the new tracking code.
+// This does NOT change the order status — it only updates the tracking code.
+export async function handleEditTrackingCode(ctx: Context) {
+  // pattern: oetrack:<orderNumber>
+  const orderNumber = cbData(ctx).split(":")[1];
+  try {
+    const order = await withRetry(
+      () => db.order.findUnique({
+        where: { orderNumber },
+        select: {
+          id: true,
+          customerName: true,
+          orderStatus: true,
+          trackingCode: true,
+          deliveryType: true,
+        },
+      }),
+      { label: `findOrderEditTrack(${orderNumber})` }
+    );
+    if (!order) {
+      await show(ctx, "❌ سفارش یافت نشد.", backKb());
+      return;
+    }
+
+    // Only allow editing tracking for shipped/delivered orders
+    if (order.orderStatus !== "shipped" && order.orderStatus !== "delivered") {
+      await show(
+        ctx,
+        `⚠️ فقط در سفارش‌های «تحویل به پست» یا «تحویل داده شد» می‌توانید کد رهگیری را ویرایش کنید.\n\nوضعیت فعلی: ${statusLabel(order.orderStatus)}`,
+        orderActionsKb(orderNumber, order.orderStatus, false)
+      );
+      return;
+    }
+
+    // Re-set the state AFTER the answerCallbacks middleware cleared it.
+    // Use isEdit=true so the text handler knows to ONLY update the tracking
+    // code (not change the status).
+    userState.set(ctx.from!.id, { action: "enter_tracking", orderNumber, isEdit: true });
+
+    const existingCodeMsg = order.trackingCode
+      ? `\n📮 کد رهگیری فعلی: <code>${escapeHtml(order.trackingCode)}</code>\n`
+      : "\n⚠️ این سفارش هنوز کد رهگیری ندارد.\n";
+
+    const deliveryHint =
+      order.deliveryType === "shahrekord"
+        ? "\n\n💡 این سفارش از نوع «تحویل در شهرکرد» است."
+        : "\n\n📦 این سفارش پستی است — لطفاً کد رهگیری را از رسید پست وارد کنید.";
+
+    await show(
+      ctx,
+      `📝 <b>ویرایش کد رهگیری پستی</b>\n\n` +
+        `🔖 سفارش: <code>${orderNumber}</code>\n` +
+        `👤 ${escapeHtml(order.customerName)}\n` +
+        `📊 وضعیت: ${statusLabel(order.orderStatus)}` +
+        existingCodeMsg +
+        `\nلطفاً <b>کد رهگیری پستی جدید</b> را ارسال کنید.\n` +
+        `کد رهگیری روی رسید پست نوشته شده است (معمولاً ۱۳ تا ۲۰ رقم).\n\n` +
+        `📝 ارقام فارسی هم قابل قبول است.` +
+        deliveryHint,
+      trackingEntryKb(orderNumber)
+    );
+  } catch (e: any) {
+    console.error(
+      `❌ handleEditTrackingCode FAILED for ${orderNumber}:`,
+      String(e?.message || e).slice(0, 200)
+    );
+    await show(ctx, "❌ خطا در بارگذاری. دوباره تلاش کنید.", backKb());
   }
 }
 
@@ -628,18 +733,24 @@ export async function handleProductDetails(ctx: Context) {
 // Toggle featured status
 export async function handleProductToggleFeatured(ctx: Context) {
   const slug = cbPayload(ctx);
-  const p = await db.product.findUnique({
-    where: { slug },
-    select: { featured: true, name: true },
-  });
+  const p = await withRetry(
+    () => db.product.findUnique({
+      where: { slug },
+      select: { featured: true, name: true },
+    }),
+    { label: `findProductFeatured(${slug})` }
+  );
   if (!p) {
     await show(ctx, "❌ محصول یافت نشد.", backKb());
     return;
   }
-  await db.product.update({
-    where: { slug },
-    data: { featured: !p.featured },
-  });
+  await withRetry(
+    () => db.product.update({
+      where: { slug },
+      data: { featured: !p.featured },
+    }),
+    { label: `updateProductFeatured(${slug})`, maxRetries: 5, baseDelayMs: 300 }
+  );
   const text = await productDetailsMessage(slug);
   await show(
     ctx,
@@ -751,18 +862,24 @@ export async function handleTextMessage(ctx: Context) {
       return;
     }
     // Fetch old price for the diff message
-    const before = await db.product.findUnique({
-      where: { slug: state.slug },
-      select: { name: true, pricePerKg: true, featured: true },
-    });
+    const before = await withRetry(
+      () => db.product.findUnique({
+        where: { slug: state.slug },
+        select: { name: true, pricePerKg: true, featured: true },
+      }),
+      { label: `findProductPrice(${state.slug})` }
+    );
     if (!before) {
       await ctx.reply("❌ محصول یافت نشد.", backKb());
       return;
     }
-    await db.product.update({
-      where: { slug: state.slug },
-      data: { pricePerKg: price },
-    });
+    await withRetry(
+      () => db.product.update({
+        where: { slug: state.slug },
+        data: { pricePerKg: price },
+      }),
+      { label: `updateProductPrice(${state.slug})`, maxRetries: 5, baseDelayMs: 300 }
+    );
     const detailText = await productDetailsMessage(state.slug);
     const diff = price - (before.pricePerKg || 0);
     const diffStr =
@@ -795,14 +912,20 @@ export async function handleTextMessage(ctx: Context) {
       );
       return;
     }
-    await db.product.update({
-      where: { slug: state.slug },
-      data: { description: text.trim() },
-    });
-    const product = await db.product.findUnique({
-      where: { slug: state.slug },
-      select: { name: true, featured: true },
-    });
+    await withRetry(
+      () => db.product.update({
+        where: { slug: state.slug },
+        data: { description: text.trim() },
+      }),
+      { label: `updateProductDesc(${state.slug})`, maxRetries: 5, baseDelayMs: 300 }
+    );
+    const product = await withRetry(
+      () => db.product.findUnique({
+        where: { slug: state.slug },
+        select: { name: true, featured: true },
+      }),
+      { label: `findProductAfterDesc(${state.slug})` }
+    );
     const detailText = await productDetailsMessage(state.slug);
     await ctx.reply(
       `✅ توضیحات محصول «${escapeHtml(product?.name || "")}» به‌روزرسانی شد.\n\n🌐 این تغییر بلافاصله در سایت اعمال می‌شود.\n\n${detailText || ""}`,
@@ -814,8 +937,11 @@ export async function handleTextMessage(ctx: Context) {
 
   // Tracking code entry flow — when admin is setting an order to "shipped"
   // (تحویل به پست), they must enter the post tracking code.
+  // Also handles the "edit tracking code" flow (isEdit=true) where the order
+  // is already shipped/delivered and only the trackingCode should be updated.
   if (state && state.action === "enter_tracking") {
     const orderNumber = state.orderNumber;
+    const isEdit = state.isEdit === true;
     clearState(userId);
     // Normalize: convert Persian/Arabic digits to ASCII, strip whitespace.
     // Tracking codes are typically all digits (13-20 digits for Iran Post),
@@ -833,14 +959,15 @@ export async function handleTextMessage(ctx: Context) {
         { parse_mode: "HTML", reply_markup: trackingEntryKb(orderNumber) }
       );
       // Re-set state so the next message is treated as another attempt
-      userState.set(userId, { action: "enter_tracking", orderNumber });
+      // (preserve isEdit flag)
+      userState.set(userId, { action: "enter_tracking", orderNumber, isEdit });
       return;
     }
     try {
       const order = await withRetry(
         () => db.order.findUnique({
           where: { orderNumber },
-          select: { id: true, customerName: true, orderStatus: true },
+          select: { id: true, customerName: true, orderStatus: true, trackingCode: true },
         }),
         { label: `findOrderTracking(${orderNumber})` }
       );
@@ -848,37 +975,75 @@ export async function handleTextMessage(ctx: Context) {
         await ctx.reply("❌ سفارش یافت نشد.", { reply_markup: backKb(), parse_mode: "HTML" });
         return;
       }
-      await withRetry(
-        () => db.order.update({
-          where: { id: order.id },
-          data: {
-            orderStatus: "shipped",
-            paymentStatus: "confirmed",
-            trackingCode: normalized,
-          },
-        }),
-        { label: `updateOrderTracking(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
-      );
-      console.log(
-        `📊 Status change: ${orderNumber} ${order.orderStatus} → shipped (tracking: ${normalized})`
-      );
-      const detailText = await orderDetailsMessage(orderNumber);
-      await ctx.reply(
-        `✅ <b>سفارش به پست تحویل داده شد</b>\n\n` +
-          `📋 <code>${orderNumber}</code>\n` +
-          `👤 ${escapeHtml(order.customerName)}\n` +
-          `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
-          `📊 وضعیت جدید: ${statusLabel("shipped")}\n` +
-          `📮 کد رهگیری: <code>${escapeHtml(normalized)}</code>\n\n` +
-          `🌐 مشتری می‌تواند با این کد رهگیری، وضعیت لحظه‌ای بسته را در سامانه پست پیگیری کند.\n\n` +
-          (detailText || ""),
-        { parse_mode: "HTML", reply_markup: orderActionsKb(orderNumber, "shipped") }
-      );
+
+      if (isEdit) {
+        // EDIT mode: only update the tracking code, don't change orderStatus.
+        // Guard: only allow if order is shipped or delivered.
+        if (order.orderStatus !== "shipped" && order.orderStatus !== "delivered") {
+          await ctx.reply(
+            `⚠️ این سفارش در وضعیت «${statusLabel(order.orderStatus)}» است و نمی‌توان کد رهگیری آن را ویرایش کرد.`,
+            { parse_mode: "HTML", reply_markup: orderActionsKb(orderNumber, order.orderStatus, !!order.trackingCode) }
+          );
+          return;
+        }
+        await withRetry(
+          () => db.order.update({
+            where: { id: order.id },
+            data: { trackingCode: normalized },
+          }),
+          { label: `updateTrackingEdit(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+        );
+        console.log(
+          `📮 Tracking code updated: ${orderNumber} (was: ${order.trackingCode || "none"} → ${normalized})`
+        );
+        const detailText = await orderDetailsMessage(orderNumber);
+        await ctx.reply(
+          `✅ <b>کد رهگیری به‌روزرسانی شد</b>\n\n` +
+            `📋 <code>${orderNumber}</code>\n` +
+            `👤 ${escapeHtml(order.customerName)}\n` +
+            `📊 وضعیت: ${statusLabel(order.orderStatus)}\n` +
+            (order.trackingCode
+              ? `📮 کد قبلی: <code>${escapeHtml(order.trackingCode)}</code>\n`
+              : "") +
+            `📮 کد جدید: <code>${escapeHtml(normalized)}</code>\n\n` +
+            `🌐 مشتری می‌تواند با این کد رهگیری، وضعیت لحظه‌ای بسته را در سامانه پست پیگیری کند.\n\n` +
+            (detailText || ""),
+          { parse_mode: "HTML", reply_markup: orderActionsKb(orderNumber, order.orderStatus, true) }
+        );
+      } else {
+        // NEW SHIPMENT mode: set orderStatus to shipped + trackingCode.
+        await withRetry(
+          () => db.order.update({
+            where: { id: order.id },
+            data: {
+              orderStatus: "shipped",
+              paymentStatus: "confirmed",
+              trackingCode: normalized,
+            },
+          }),
+          { label: `updateOrderTracking(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+        );
+        console.log(
+          `📊 Status change: ${orderNumber} ${order.orderStatus} → shipped (tracking: ${normalized})`
+        );
+        const detailText = await orderDetailsMessage(orderNumber);
+        await ctx.reply(
+          `✅ <b>سفارش به پست تحویل داده شد</b>\n\n` +
+            `📋 <code>${orderNumber}</code>\n` +
+            `👤 ${escapeHtml(order.customerName)}\n` +
+            `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
+            `📊 وضعیت جدید: ${statusLabel("shipped")}\n` +
+            `📮 کد رهگیری: <code>${escapeHtml(normalized)}</code>\n\n` +
+            `🌐 مشتری می‌تواند با این کد رهگیری، وضعیت لحظه‌ای بسته را در سامانه پست پیگیری کند.\n\n` +
+            (detailText || ""),
+          { parse_mode: "HTML", reply_markup: orderActionsKb(orderNumber, "shipped", true) }
+        );
+      }
     } catch (e: any) {
       const errCode = e?.code || e?.errno || "N/A";
       const errMsg = String(e?.message || e).slice(0, 300);
       console.error(
-        `❌ enter_tracking FAILED for ${orderNumber} | code=${errCode} | msg=${errMsg}`
+        `❌ enter_tracking FAILED for ${orderNumber} (isEdit=${isEdit}) | code=${errCode} | msg=${errMsg}`
       );
       await ctx.reply(
         `❌ خطا در ثبت کد رهگیری.\n\n⚠️ خطا: <code>${errCode}</code>\n\nلطفاً دوباره تلاش کنید.`,

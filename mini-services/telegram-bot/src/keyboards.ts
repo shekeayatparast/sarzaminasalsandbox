@@ -83,7 +83,13 @@ export const orderListKb = (
 // Quick-nav to the payment-verification queue is always available
 // (the admin's most frequent loop: confirm one → go to next).
 // Destructive actions (cancel) are separated with a confirmation step.
-export const orderActionsKb = (orderNumber: string, currentStatus: string) => {
+// For shipped/delivered orders, an "edit tracking code" button is shown
+// so the admin can fix a typo or add a code that was previously skipped.
+export const orderActionsKb = (
+  orderNumber: string,
+  currentStatus: string,
+  hasTrackingCode: boolean = false
+) => {
   const kb = new InlineKeyboard();
   const nxt = nextStatus(currentStatus);
 
@@ -94,6 +100,14 @@ export const orderActionsKb = (orderNumber: string, currentStatus: string) => {
 
   // Secondary: full status menu (for corrections / jumps)
   kb.text("🔄 تغییر وضعیت (همه)", `os:${orderNumber}`).row();
+
+  // Edit tracking code — only for shipped/delivered orders
+  if (currentStatus === "shipped" || currentStatus === "delivered") {
+    kb.text(
+      hasTrackingCode ? "📝 ویرایش کد رهگیری" : "📮 افزودن کد رهگیری",
+      `oetrack:${orderNumber}`
+    ).row();
+  }
 
   // Cancel (destructive) — only if not already terminal
   if (currentStatus !== "cancelled" && currentStatus !== "delivered") {

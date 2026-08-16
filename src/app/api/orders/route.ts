@@ -75,6 +75,28 @@ export async function POST(req: NextRequest) {
 
     // Validate every item
     for (const item of body.items) {
+      // Validate quantity: must be a positive integer (1..99)
+      if (
+        !Number.isInteger(item.quantity) ||
+        item.quantity < 1 ||
+        item.quantity > 99
+      ) {
+        return NextResponse.json(
+          { error: "تعداد سفارش نامعتبر است" },
+          { status: 400 }
+        );
+      }
+      // Validate container size: must be positive number
+      if (
+        typeof item.containerSize !== "number" ||
+        item.containerSize <= 0 ||
+        item.containerSize > 100
+      ) {
+        return NextResponse.json(
+          { error: "اندازه ظرف نامعتبر است" },
+          { status: 400 }
+        );
+      }
       const p = productMap.get(item.productId);
       if (!p) {
         return NextResponse.json(
@@ -108,20 +130,20 @@ export async function POST(req: NextRequest) {
     const deliveryType =
       body.city.trim() === FREE_DELIVERY_CITY ? "shahrekord" : "post";
 
-    const orderNumber = generateOrderNumber();
-
-    // Ensure orderNumber uniqueness (retry if collision)
+    // Ensure orderNumber uniqueness (regenerate on collision until unique, max 5 tries)
+    let orderNumber = generateOrderNumber();
     let attempts = 0;
-    let created = null;
     while (attempts < 5) {
       const existing = await db.order.findUnique({
         where: { orderNumber },
       });
       if (!existing) break;
+      // Collision — regenerate a NEW order number and retry
+      orderNumber = generateOrderNumber();
       attempts++;
     }
 
-    created = await db.order.create({
+    const created = await db.order.create({
       data: {
         orderNumber,
         customerName: body.customerName.trim(),

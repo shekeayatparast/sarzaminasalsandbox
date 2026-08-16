@@ -1,0 +1,921 @@
+     1→     1→// All command & callback handlers for the Telegram bot.
+     2→     2→// Designed around the admin's real workflow:
+     3→     3→//   1. Open bot → check today's orders & pending payment verifications
+     4→     4→//   2. Verify payments → confirm → prepare → ship → deliver
+     5→     5→//   3. Search for specific orders/customers by phone or order number
+     6→     6→//   4. Manage products (price, featured, description)
+     7→     7→import type { Context } from "grammy";
+     8→     8→import { InlineKeyboard } from "grammy";
+     9→     9→import { db, withRetry } from "./db.js";
+    10→    10→import { ADMIN_ID } from "./config.js";
+    11→    11→import {
+    12→    12→  toPersianDigits,
+    13→    13→  formatToman,
+    14→    14→  statusLabel,
+    15→    15→  STATUS_LABELS,
+    16→    16→  STATUS_EMOJI,
+    17→    17→  escapeHtml,
+    18→    18→  normalizeSearchQuery,
+    19→    19→  toAsciiDigits,
+    20→    20→} from "./format.js";
+    21→    21→import {
+    22→    22→  mainMenuKb,
+    23→    23→  backKb,
+    24→    24→  statusFilterKb,
+    25→    25→  orderListKb,
+    26→    26→  orderActionsKb,
+    27→    27→  orderStatusKb,
+    28→    28→  cancelConfirmKb,
+    29→    29→  customerListKb,
+    30→    30→  customerActionsKb,
+    31→    31→  productListKb,
+    32→    32→  productActionsKb,
+    33→    33→  notifyNewOrderKb,
+    34→    34→  notifyPaymentKb,
+    35→    35→  editPriceCancelKb,
+    36→    36→  trackingEntryKb,
+    37→    37→} from "./keyboards.js";
+    38→    38→import {
+    39→    39→  welcomeMessage,
+    40→    40→  statsMessage,
+    41→    41→  orderListMessage,
+    42→    42→  orderDetailsMessage,
+    43→    43→  customerListMessage,
+    44→    44→  customerDetailsMessage,
+    45→    45→  productListMessage,
+    46→    46→  productDetailsMessage,
+    47→    47→  searchMessage,
+    48→    48→  searchOrders,
+    49→    49→} from "./messages.js";
+    50→    50→
+    51→    51→const PAGE_SIZE = 5;
+    52→    52→
+    53→    53→// ── In-memory state for multi-step flows ─────────────────────────────
+    54→    54→// Each flow stores { action, payload }. Cleared on any navigation.
+    55→    55→type UserState =
+    56→    56→  | { action: "edit_price"; slug: string }
+    57→    57→  | { action: "edit_desc"; slug: string }
+    58→    58→  | { action: "enter_tracking"; orderNumber: string };
+    59→    59→
+    60→    60→const userState = new Map<number, UserState>();
+    61→    61→
+    62→    62→const clearState = (userId: number) => userState.delete(userId);
+    63→    63→
+    64→    64→// ── Helper: extract callback data from ctx ───────────────────────────
+    65→    65→// grammy's ctx.match is a RegExpMatchArray when using regex patterns.
+    66→    66→// We need the raw callback_data string instead, which is in ctx.callbackQuery.data.
+    67→    67→const cbData = (ctx: Context): string => ctx.callbackQuery?.data || "";
+    68→    68→
+    69→    69→// Extract the "payload" portion of a callback data string (everything after the first colon).
+    70→    70→// Example: "o:HN-12345" → "HN-12345"; "oss:HN-12345:confirmed" → "HN-12345:confirmed"
+    71→    71→const cbPayload = (ctx: Context): string => {
+    72→    72→  const data = cbData(ctx);
+    73→    73→  const idx = data.indexOf(":");
+    74→    74→  return idx >= 0 ? data.slice(idx + 1) : "";
+    75→    75→};
+    76→    76→
+    77→    77→// Extract page number from a paginated callback like "today:0", "all:2", "cust:1"
+    78→    78→const cbPage = (ctx: Context): number => {
+    79→    79→  const data = cbData(ctx);
+    80→    80→  const parts = data.split(":");
+    81→    81→  return Number(parts[1] || 0);
+    82→    82→};
+    83→    83→
+    84→    84→// ── Helper: show text (edit message if possible, else reply) ─────────
+    85→    85→async function show(ctx: Context, text: string, keyboard?: any) {
+    86→    86→  const opts: any = {
+    87→    87→    parse_mode: "HTML",
+    88→    88→    disable_web_page_preview: true,
+    89→    89→  };
+    90→    90→  if (keyboard) opts.reply_markup = keyboard;
+    91→    91→  try {
+    92→    92→    await ctx.editMessageText(text, opts);
+    93→    93→  } catch {
+    94→    94→    try {
+    95→    95→      await ctx.reply(text, opts);
+    96→    96→    } catch (e) {
+    97→    97→      console.error("show() reply failed:", e);
+    98→    98→    }
+    99→    99→  }
+   100→   100→}
+   101→   101→
+   102→   102→// ── Access control middleware ────────────────────────────────────────
+   103→   103→export async function accessControl(ctx: Context, next: () => Promise<void>) {
+   104→   104→  if (!ctx.from) return;
+   105→   105→  if (ctx.from.id !== ADMIN_ID) {
+   106→   106→    try {
+   107→   107→      await ctx.reply(
+   108→   108→        "⛔ شما دسترسی به این ربات ندارید.\n\n" +
+   109→   109→          "این ربات اختصاصاً برای مدیریت فروشگاه «سرزمین عسل» طراحی شده است."
+   110→   110→      );
+   111→   111→    } catch {}
+   112→   112→    return;
+   113→   113→  }
+   114→   114→  return next();
+   115→   115→}
+   116→   116→
+   117→   117→// Auto-answer callback queries to remove loading spinner.
+   118→   118→// ALSO: clear any pending multi-step flow state (edit_price / edit_desc) on
+   119→   119→// every button click. This prevents a stale state from causing the admin's next
+   120→   120→// text message to be misinterpreted as a price/desc edit for the OLD product.
+   121→   121→// (Handlers that START a flow — handleProductEditPrice, handleProductEditDesc —
+   122→   122→// re-set the state AFTER this middleware clears it, so the flow still works.)
+   123→   123→export async function answerCallbacks(ctx: Context, next: () => Promise<void>) {
+   124→   124→  if (ctx.callbackQuery) {
+   125→   125→    try {
+   126→   126→      await ctx.answerCallbackQuery();
+   127→   127→    } catch {}
+   128→   128→    // Clear any pending edit flow — the admin clicked a button, so they're
+   129→   129→    // navigating away from the text-input flow. If they clicked "edit price"
+   130→   130→    // or "edit desc", the handler will re-set the state after this clears it.
+   131→   131→    if (ctx.from) clearState(ctx.from.id);
+   132→   132→  }
+   133→   133→  return next();
+   134→   134→}
+   135→   135→
+   136→   136→// ── Helper: fetch live counts for the main menu ─────────────────────
+   137→   137→// The main menu shows count badges for the two most actionable items:
+   138→   138→// today's orders and orders awaiting payment verification.
+   139→   139→async function fetchMainMenuStats(): Promise<{ todayCount: number; verifyCount: number }> {
+   140→   140→  const now = new Date();
+   141→   141→  const todayStart = new Date(now);
+   142→   142→  todayStart.setHours(0, 0, 0, 0);
+   143→   143→  const [todayCount, verifyCount] = await Promise.all([
+   144→   144→    db.order.count({ where: { createdAt: { gte: todayStart } } }),
+   145→   145→    db.order.count({ where: { orderStatus: "paid" } }),
+   146→   146→  ]);
+   147→   147→  return { todayCount, verifyCount };
+   148→   148→}
+   149→   149→
+   150→   150→// ── /start, /menu ────────────────────────────────────────────────────
+   151→   151→export async function handleStart(ctx: Context) {
+   152→   152→  clearState(ctx.from?.id || 0);
+   153→   153→  const name = ctx.from?.first_name || "";
+   154→   154→  const { todayCount, verifyCount } = await fetchMainMenuStats();
+   155→   155→  await ctx.reply(welcomeMessage(name, todayCount, verifyCount), {
+   156→   156→    parse_mode: "HTML",
+   157→   157→    reply_markup: mainMenuKb(todayCount, verifyCount),
+   158→   158→    disable_web_page_preview: true,
+   159→   159→  });
+   160→   160→}
+   161→   161→
+   162→   162→export async function handleHelp(ctx: Context) {
+   163→   163→  clearState(ctx.from?.id || 0);
+   164→   164→  const msg =
+   165→   165→    `📖 <b>راهنمای ربات مدیریت سرزمین عسل</b>\n\n` +
+   166→   166→    `این ربات به شما امکان می‌دهد فروشگاه عسل را به طور کامل مدیریت کنید:\n\n` +
+   167→   167→    `📦 <b>سفارش‌های امروز:</b> همه سفارش‌های ثبت‌شده امروز\n` +
+   168→   168→    `💳 <b>در انتظار تأیید پرداخت:</b> سفارش‌هایی که مشتری پرداخت را تأیید کرده ولی هنوز از طرف شما بررسی نشده\n` +
+   169→   169→    `📋 <b>همه سفارش‌ها:</b> لیست کامل با فیلتر بر اساس وضعیت\n` +
+   170→   170→    `📊 <b>آمار:</b> گزارش جامع فروش، درآمد و پرفروش‌ترین محصولات\n` +
+   171→   171→    `👥 <b>مشتریان:</b> لیست مشتریان و سوابق خرید\n` +
+   172→   172→    `🍯 <b>محصولات:</b> مشاهده، ویرایش قیمت، توضیحات و وضعیت ویژه\n` +
+   173→   173→    `🔍 <b>جستجو:</b> یافتن سفارش با شماره سفارش، تلفن، یا نام مشتری\n\n` +
+   174→   174→    `💡 <b>جستجوی سریع:</b> کافیست شماره سفارش (مثل <code>12345</code> یا <code>HN-12345</code>)، شماره تلفن مشتری، یا نام مشتری را مستقیماً ارسال کنید. ارقام فارسی هم پشتیبانی می‌شوند.\n\n` +
+   175→   175→    `🔔 با ثبت هر سفارش جدید یا تأیید پرداخت توسط مشتری، به طور خودکار به شما اطلاع داده می‌شود.\n\n` +
+   176→   176→    `📋 <b>گردش کار پیشنهادی:</b>\n` +
+   177→   177→    `۱. مشتری سفارش ثبت می‌کند → به شما اطلاع داده می‌شود\n` +
+   178→   178→    `۲. مشتری پرداخت می‌کند و دکمه «تأیید پرداخت» را می‌زند → به شما اطلاع داده می‌شود\n` +
+   179→   179→    `۳. شما وجه را در حساب بررسی می‌کنید و «✅ تأیید پرداخت» را می‌زنید\n` +
+   180→   180→    `۴. سفارش را آماده کرده و وضعیت را به «📦 در حال آماده‌سازی» تغییر می‌دهید\n` +
+   181→   181→    `۵. پس از تحویل بسته به پست، وضعیت را به «📮 تحویل به پست» تغییر می‌دهید و کد رهگیری پستی را وارد می‌کنید\n` +
+   182→   182→    `۶. مشتری می‌تواند با کد رهگیری، وضعیت لحظه‌ای بسته را از سامانه پست پیگیری کند\n` +
+   183→   183→    `۷. پس از تحویل به مشتری، وضعیت را به «🏁 تحویل داده شد» تغییر می‌دهید`;
+   184→   184→  const { todayCount, verifyCount } = await fetchMainMenuStats();
+   185→   185→  await ctx.reply(msg, {
+   186→   186→    parse_mode: "HTML",
+   187→   187→    reply_markup: mainMenuKb(todayCount, verifyCount),
+   188→   188→    disable_web_page_preview: true,
+   189→   189→  });
+   190→   190→}
+   191→   191→
+   192→   192→// ── Back to main menu ────────────────────────────────────────────────
+   193→   193→export async function handleBack(ctx: Context) {
+   194→   194→  clearState(ctx.from?.id || 0);
+   195→   195→  const name = ctx.from?.first_name || "";
+   196→   196→  const { todayCount, verifyCount } = await fetchMainMenuStats();
+   197→   197→  await show(ctx, welcomeMessage(name, todayCount, verifyCount), mainMenuKb(todayCount, verifyCount));
+   198→   198→}
+   199→   199→
+   200→   200→// ── Statistics ───────────────────────────────────────────────────────
+   201→   201→export async function handleStats(ctx: Context) {
+   202→   202→  clearState(ctx.from?.id || 0);
+   203→   203→  try {
+   204→   204→    await ctx.editMessageText("⏳ در حال محاسبه آمار...", { parse_mode: "HTML" });
+   205→   205→  } catch {}
+   206→   206→  try {
+   207→   207→    const text = await statsMessage();
+   208→   208→    await show(ctx, text, backKb());
+   209→   209→  } catch (e) {
+   210→   210→    console.error("stats error:", e);
+   211→   211→    await show(ctx, "❌ خطا در دریافت آمار. دوباره تلاش کنید.", backKb());
+   212→   212→  }
+   213→   213→}
+   214→   214→
+   215→   215→// ── Today's orders ───────────────────────────────────────────────────
+   216→   216→// Admin's most common view: what happened today.
+   217→   217→export async function handleTodayOrders(ctx: Context) {
+   218→   218→  clearState(ctx.from?.id || 0);
+   219→   219→  const page = cbPage(ctx);
+   220→   220→  const now = new Date();
+   221→   221→  const todayStart = new Date(now);
+   222→   222→  todayStart.setHours(0, 0, 0, 0);
+   223→   223→  const { text, totalPages, orders } = await orderListMessage(
+   224→   224→    `📦 <b>سفارش‌های امروز</b>\n📅 ${new Intl.DateTimeFormat("fa-IR", { weekday: "long", month: "long", day: "numeric" }).format(now)}`,
+   225→   225→    { createdAt: { gte: todayStart } },
+   226→   226→    page
+   227→   227→  );
+   228→   228→  const kb = orderListKb(orders, "today", page, totalPages);
+   229→   229→  await show(ctx, text, kb);
+   230→   230→}
+   231→   231→
+   232→   232→// ── Orders awaiting payment verification (status = "paid") ───────────
+   233→   233→// These are orders where the customer clicked "I paid" — admin must
+   234→   234→// verify the bank transfer and confirm.
+   235→   235→export async function handleVerifyOrders(ctx: Context) {
+   236→   236→  clearState(ctx.from?.id || 0);
+   237→   237→  const page = cbPage(ctx);
+   238→   238→  const { text, totalPages, orders } = await orderListMessage(
+   239→   239→    `💳 <b>در انتظار تأیید پرداخت</b>\n\n⚠️ این سفارش‌ها توسط مشتری پرداخت اعلام شده‌اند. لطفاً وجه واریزی را در حساب بانکی بررسی کرده و سپس تأیید کنید.`,
+   240→   240→    { orderStatus: "paid" },
+   241→   241→    page
+   242→   242→  );
+   243→   243→  const kb = orderListKb(orders, "verify", page, totalPages);
+   244→   244→  await show(ctx, text, kb);
+   245→   245→}
+   246→   246→
+   247→   247→// ── Order lists ──────────────────────────────────────────────────────
+   248→   248→export async function handleNewOrders(ctx: Context) {
+   249→   249→  clearState(ctx.from?.id || 0);
+   250→   250→  const page = cbPage(ctx);
+   251→   251→  const { text, totalPages, orders } = await orderListMessage(
+   252→   252→    `⏳ <b>سفارش‌های در انتظار پرداخت</b>`,
+   253→   253→    { orderStatus: "awaiting_payment" },
+   254→   254→    page
+   255→   255→  );
+   256→   256→  const kb = orderListKb(orders, "new", page, totalPages);
+   257→   257→  await show(ctx, text, kb);
+   258→   258→}
+   259→   259→
+   260→   260→export async function handleAllOrders(ctx: Context) {
+   261→   261→  clearState(ctx.from?.id || 0);
+   262→   262→  const page = cbPage(ctx);
+   263→   263→  const { text, totalPages, orders } = await orderListMessage(
+   264→   264→    `📋 <b>همه سفارش‌ها</b>`,
+   265→   265→    {},
+   266→   266→    page
+   267→   267→  );
+   268→   268→  const kb = orderListKb(orders, "all", page, totalPages);
+   269→   269→  await show(ctx, text, kb);
+   270→   270→}
+   271→   271→
+   272→   272→export async function handleStatusFilter(ctx: Context) {
+   273→   273→  clearState(ctx.from?.id || 0);
+   274→   274→  await show(ctx, "📊 <b>فیلتر سفارش‌ها بر اساس وضعیت</b>\n\nیک وضعیت را انتخاب کنید:", statusFilterKb());
+   275→   275→}
+   276→   276→
+   277→   277→export async function handleStatusOrders(ctx: Context) {
+   278→   278→  clearState(ctx.from?.id || 0);
+   279→   279→  // pattern: st:<status>:<page>
+   280→   280→  const parts = cbData(ctx).split(":");
+   281→   281→  const status = parts[1] || "awaiting_payment";
+   282→   282→  const page = Number(parts[2] || 0);
+   283→   283→  const where = { orderStatus: status };
+   284→   284→  const { text, totalPages, orders } = await orderListMessage(
+   285→   285→    `📋 <b>سفارش‌ها — ${statusLabel(status)}</b>`,
+   286→   286→    where,
+   287→   287→    page
+   288→   288→  );
+   289→   289→  const kb = orderListKb(orders, `st:${status}`, page, totalPages);
+   290→   290→  await show(ctx, text, kb);
+   291→   291→}
+   292→   292→
+   293→   293→// ── Order details ────────────────────────────────────────────────────
+   294→   294→export async function handleOrderDetails(ctx: Context) {
+   295→   295→  clearState(ctx.from?.id || 0);
+   296→   296→  const orderNumber = cbPayload(ctx);
+   297→   297→  try {
+   298→   298→    await ctx.editMessageText("⏳ در حال بارگذاری...", { parse_mode: "HTML" });
+   299→   299→  } catch {}
+   300→   300→  const order = await db.order.findUnique({
+   301→   301→    where: { orderNumber },
+   302→   302→    select: { orderStatus: true },
+   303→   303→  });
+   304→   304→  const text = await orderDetailsMessage(orderNumber);
+   305→   305→  if (!text) {
+   306→   306→    await show(ctx, "❌ سفارش یافت نشد.", backKb());
+   307→   307→    return;
+   308→   308→  }
+   309→   309→  await show(ctx, text, orderActionsKb(orderNumber, order?.orderStatus || ""));
+   310→   310→}
+   311→   311→
+   312→   312→// ── Order status change menu ─────────────────────────────────────────
+   313→   313→export async function handleOrderStatusMenu(ctx: Context) {
+   314→   314→  const orderNumber = cbPayload(ctx);
+   315→   315→  await show(
+   316→   316→    ctx,
+   317→   317→    `🔄 <b>تغییر وضعیت سفارش</b>\n\n🔖 <code>${orderNumber}</code>\n\nوضعیت جدید را انتخاب کنید:`,
+   318→   318→    orderStatusKb(orderNumber)
+   319→   319→  );
+   320→   320→}
+   321→   321→
+   322→   322→// ── Set order status ─────────────────────────────────────────────────
+   323→   323→// This is the admin's primary manual action — changing an order's status.
+   324→   324→// It handles the full status workflow: awaiting_payment → paid → confirmed
+   325→   325→// → preparing → shipped → delivered (plus cancelled as a side state).
+   326→   326→// When the admin advances to "confirmed" or later, payment is also marked
+   327→   327→// as confirmed. When moved back to "awaiting_payment", payment resets to pending.
+   328→   328→//
+   329→   329→// SPECIAL CASE: When the admin advances to "shipped" (تحویل به پست), the
+   330→   330→// bot asks for the post tracking code BEFORE updating the status. The admin
+   331→   331→// either sends the code as a text message (which is then saved along with
+   332→   332→// the status) OR taps "بدون کد رهگیری" to skip and just set the status.
+   333→   333→export async function handleSetOrderStatus(ctx: Context) {
+   334→   334→  // pattern: oss:<orderNumber>:<status>  (orderNumber has no colon, so parts[1]=orderNumber, parts[2]=status)
+   335→   335→  const parts = cbData(ctx).split(":");
+   336→   336→  const orderNumber = parts[1];
+   337→   337→  const status = parts[2];
+   338→   338→
+   339→   339→  // Validate the status is a known value
+   340→   340→  const validStatuses = [
+   341→   341→    "awaiting_payment", "paid", "confirmed", "preparing", "shipped", "delivered", "cancelled",
+   342→   342→  ];
+   343→   343→  if (!validStatuses.includes(status)) {
+   344→   344→    await show(ctx, "❌ وضعیت نامعتبر است.", backKb());
+   345→   345→    return;
+   346→   346→  }
+   347→   347→
+   348→   348→  try {
+   349→   349→    // Show a "processing" indicator so the admin knows the click was received
+   350→   350→    try {
+   351→   351→      await ctx.editMessageText("⏳ در حال به‌روزرسانی وضعیت...", { parse_mode: "HTML" });
+   352→   352→    } catch {}
+   353→   353→
+   354→   354→    const order = await withRetry(
+   355→   355→      () => db.order.findUnique({
+   356→   356→        where: { orderNumber },
+   357→   357→        select: {
+   358→   358→          id: true,
+   359→   359→          customerName: true,
+   360→   360→          orderStatus: true,
+   361→   361→          deliveryType: true,
+   362→   362→          trackingCode: true,
+   363→   363→        },
+   364→   364→      }),
+   365→   365→      { label: `findOrder(${orderNumber})` }
+   366→   366→    );
+   367→   367→    if (!order) {
+   368→   368→      await show(ctx, "❌ سفارش یافت نشد.", backKb());
+   369→   369→      return;
+   370→   370→    }
+   371→   371→
+   372→   372→    // If status hasn't changed, no-op (avoid unnecessary writes)
+   373→   373→    if (order.orderStatus === status) {
+   374→   374→      const text = await orderDetailsMessage(orderNumber);
+   375→   375→      await show(ctx, `ℹ️ وضعیت سفارش از قبل «${statusLabel(status)}» بود.\n\n${text || ""}`, orderActionsKb(orderNumber, status));
+   376→   376→      return;
+   377→   377→    }
+   378→   378→
+   379→   379→    // SPECIAL CASE: status === "shipped" → prompt for the post tracking code
+   380→   380→    // before updating. The admin enters the code (or skips) and the order is
+   381→   381→    // updated in the tracking-code handler.
+   382→   382→    if (status === "shipped") {
+   383→   383→      // Re-set the state AFTER the answerCallbacks middleware cleared it.
+   384→   384→      userState.set(ctx.from!.id, { action: "enter_tracking", orderNumber });
+   385→   385→      const deliveryHint =
+   386→   386→        order.deliveryType === "shahrekord"
+   387→   387→          ? "\n\n💡 این سفارش از نوع «تحویل در شهرکرد» است. اگر بسته را حضوری تحویل می‌دهید، می‌توانید بدون کد رهگیری ادامه دهید."
+   388→   388→          : "\n\n📦 این سفارش پستی است — لطفاً کد رهگیری را از رسید پست وارد کنید تا مشتری بتواند بسته را در سامانه پست پیگیری کند.";
+   389→   389→      await show(
+   390→   390→        ctx,
+   391→   391→        `📮 <b>تحویل به پست — وارد کردن کد رهگیری</b>\n\n` +
+   392→   392→          `🔖 سفارش: <code>${orderNumber}</code>\n` +
+   393→   393→          `👤 ${escapeHtml(order.customerName)}\n\n` +
+   394→   394→          `لطفاً <b>کد رهگیری پستی</b> را ارسال کنید.\n` +
+   395→   395→          `کد رهگیری روی رسید پست نوشته شده است (معمولاً ۱۳ تا ۲۰ رقم).\n\n` +
+   396→   396→          `📝 ارقام فارسی هم قابل قبول است.` +
+   397→   397→          deliveryHint,
+   398→   398→        trackingEntryKb(orderNumber)
+   399→   399→      );
+   400→   400→      return;
+   401→   401→    }
+   402→   402→
+   403→   403→    // Determine the correct paymentStatus for the new order status.
+   404→   404→    // Rule:
+   405→   405→    //   - awaiting_payment  → payment must be "pending"  (customer hasn't paid)
+   406→   406→    //   - paid              → payment must be "confirmed" (customer clicked "I paid")
+   407→   407→    //   - confirmed/preparing/shipped/delivered → payment must be "confirmed"
+   408→   408→    //   - cancelled         → leave unchanged (preserve for accounting/audit)
+   409→   409→    //
+   410→   410→    // This guarantees the site's tracking page never shows an impossible
+   411→   411→    // combination like "shipped + pending payment" or "awaiting + confirmed".
+   412→   412→    let newPaymentStatus: string | undefined;
+   413→   413→    if (status === "awaiting_payment") {
+   414→   414→      newPaymentStatus = "pending";
+   415→   415→    } else if (status === "cancelled") {
+   416→   416→      newPaymentStatus = undefined; // preserve existing
+   417→   417→    } else {
+   418→   418→      // paid, confirmed, preparing, shipped, delivered
+   419→   419→      newPaymentStatus = "confirmed";
+   420→   420→    }
+   421→   421→
+   422→   422→    await withRetry(
+   423→   423→      () => db.order.update({
+   424→   424→        where: { id: order.id },
+   425→   425→        data: {
+   426→   426→          orderStatus: status,
+   427→   427→          ...(newPaymentStatus !== undefined
+   428→   428→            ? { paymentStatus: newPaymentStatus }
+   429→   429→            : {}),
+   430→   430→        },
+   431→   431→      }),
+   432→   432→      { label: `updateOrderStatus(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+   433→   433→    );
+   434→   434→
+   435→   435→    console.log(
+   436→   436→      `📊 Status change: ${orderNumber} ${order.orderStatus} → ${status}` +
+   437→   437→        (newPaymentStatus !== undefined
+   438→   438→          ? ` (payment: ${newPaymentStatus})`
+   439→   439→          : "")
+   440→   440→    );
+   441→   441→
+   442→   442→    const text = await orderDetailsMessage(orderNumber);
+   443→   443→    const msg =
+   444→   444→      `✅ <b>وضعیت سفارش به‌روزرسانی شد</b>\n\n` +
+   445→   445→      `📋 <code>${orderNumber}</code>\n` +
+   446→   446→      `👤 ${escapeHtml(order.customerName)}\n` +
+   447→   447→      `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
+   448→   448→      `📊 وضعیت جدید: ${statusLabel(status)}\n\n` +
+   449→   449→      (text || "");
+   450→   450→    await show(ctx, msg, orderActionsKb(orderNumber, status));
+   451→   451→  } catch (e: any) {
+   452→   452→    // Log the FULL error details so we can diagnose the root cause
+   453→   453→    const errCode = e?.code || e?.errno || "N/A";
+   454→   454→    const errMsg = String(e?.message || e).slice(0, 300);
+   455→   455→    const errStack = e?.stack ? String(e.stack).split("\n").slice(0, 3).join(" | ") : "";
+   456→   456→    console.error(
+   457→   457→      `❌ handleSetOrderStatus FAILED for ${orderNumber} → ${status} | ` +
+   458→   458→      `code=${errCode} | msg=${errMsg}` +
+   459→   459→      (errStack ? ` | stack=${errStack}` : "")
+   460→   460→    );
+   461→   461→    await show(
+   462→   462→      ctx,
+   463→   463→      `❌ <b>خطا در به‌روزرسانی وضعیت سفارش</b>\n\n` +
+   464→   464→        `📋 سفارش: <code>${orderNumber}</code>\n` +
+   465→   465→        `📊 وضعیت هدف: ${statusLabel(status)}\n` +
+   466→   466→        `⚠️ خطا: <code>${errCode}</code>\n\n` +
+   467→   467→        `لطفاً دوباره تلاش کنید. اگر خطا تکرار شد، چند ثانیه صبر کنید و دوباره امتحان کنید.`,
+   468→   468→      backKb()
+   469→   469→    );
+   470→   470→  }
+   471→   471→}
+   472→   472→
+   473→   473→// ── Skip tracking code ───────────────────────────────────────────────
+   474→   474→// Called when the admin taps "بدون کد رهگیری" in the tracking-entry prompt.
+   475→   475→// Updates the order to "shipped" with trackingCode = null.
+   476→   476→export async function handleSkipTrackingCode(ctx: Context) {
+   477→   477→  // pattern: ossk:<orderNumber>
+   478→   478→  const orderNumber = cbData(ctx).split(":")[1];
+   479→   479→  try {
+   480→   480→    try {
+   481→   481→      await ctx.editMessageText("⏳ در حال به‌روزرسانی وضعیت...", { parse_mode: "HTML" });
+   482→   482→    } catch {}
+   483→   483→
+   484→   484→    const order = await withRetry(
+   485→   485→      () => db.order.findUnique({
+   486→   486→        where: { orderNumber },
+   487→   487→        select: { id: true, customerName: true, orderStatus: true },
+   488→   488→      }),
+   489→   489→      { label: `findOrderSkip(${orderNumber})` }
+   490→   490→    );
+   491→   491→    if (!order) {
+   492→   492→      await show(ctx, "❌ سفارش یافت نشد.", backKb());
+   493→   493→      return;
+   494→   494→    }
+   495→   495→
+   496→   496→    await withRetry(
+   497→   497→      () => db.order.update({
+   498→   498→        where: { id: order.id },
+   499→   499→        data: {
+   500→   500→          orderStatus: "shipped",
+   501→   501→          paymentStatus: "confirmed",
+   502→   502→          trackingCode: null,
+   503→   503→        },
+   504→   504→      }),
+   505→   505→      { label: `updateOrderStatusSkip(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+   506→   506→    );
+   507→   507→
+   508→   508→    console.log(`📊 Status change: ${orderNumber} ${order.orderStatus} → shipped (no tracking code)`);
+   509→   509→
+   510→   510→    const text = await orderDetailsMessage(orderNumber);
+   511→   511→    const msg =
+   512→   512→      `✅ <b>سفارش به پست تحویل داده شد</b>\n\n` +
+   513→   513→      `📋 <code>${orderNumber}</code>\n` +
+   514→   514→      `👤 ${escapeHtml(order.customerName)}\n` +
+   515→   515→      `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
+   516→   516→      `📊 وضعیت جدید: ${statusLabel("shipped")}\n` +
+   517→   517→      `⚠️ بدون کد رهگیری — مشتری نمی‌تواند بسته را در سامانه پست پیگیری کند.\n\n` +
+   518→   518→      (text || "");
+   519→   519→    await show(ctx, msg, orderActionsKb(orderNumber, "shipped"));
+   520→   520→  } catch (e: any) {
+   521→   521→    const errCode = e?.code || e?.errno || "N/A";
+   522→   522→    const errMsg = String(e?.message || e).slice(0, 300);
+   523→   523→    console.error(
+   524→   524→      `❌ handleSkipTrackingCode FAILED for ${orderNumber} | ` +
+   525→   525→      `code=${errCode} | msg=${errMsg}`
+   526→   526→    );
+   527→   527→    await show(
+   528→   528→      ctx,
+   529→   529→      `❌ <b>خطا در به‌روزرسانی وضعیت سفارش</b>\n\n` +
+   530→   530→        `📋 سفارش: <code>${orderNumber}</code>\n` +
+   531→   531→        `⚠️ خطا: <code>${errCode}</code>\n\n` +
+   532→   532→        `لطفاً دوباره تلاش کنید.`,
+   533→   533→      backKb()
+   534→   534→    );
+   535→   535→  }
+   536→   536→}
+   537→   537→
+   538→   538→// ── Cancel order confirmation ────────────────────────────────────────
+   539→   539→export async function handleCancelOrder(ctx: Context) {
+   540→   540→  const orderNumber = cbPayload(ctx);
+   541→   541→  await show(
+   542→   542→    ctx,
+   543→   543→    `⚠️ <b>تأیید لغو سفارش</b>\n\n` +
+   544→   544→      `🔖 <code>${orderNumber}</code>\n\n` +
+   545→   545→      `آیا مطمئن هستید که می‌خواهید این سفارش را لغو کنید؟\n` +
+   546→   546→      `این عمل قابل بازگشت نیست (هرچند وضعیت را می‌توانید دوباره تغییر دهید).`,
+   547→   547→    cancelConfirmKb(orderNumber)
+   548→   548→  );
+   549→   549→}
+   550→   550→
+   551→   551→// ── Customers ────────────────────────────────────────────────────────
+   552→   552→export async function handleCustomers(ctx: Context) {
+   553→   553→  clearState(ctx.from?.id || 0);
+   554→   554→  const page = cbPage(ctx);
+   555→   555→  const { text, totalPages, customers } = await customerListMessage(page);
+   556→   556→  const kb = customerListKb(customers, page, totalPages);
+   557→   557→  await show(ctx, text, kb);
+   558→   558→}
+   559→   559→
+   560→   560→export async function handleCustomerDetails(ctx: Context) {
+   561→   561→  const phone = cbPayload(ctx);
+   562→   562→  try {
+   563→   563→    await ctx.editMessageText("⏳ در حال بارگذاری...", { parse_mode: "HTML" });
+   564→   564→  } catch {}
+   565→   565→  const text = await customerDetailsMessage(phone);
+   566→   566→  if (!text) {
+   567→   567→    await show(ctx, "❌ مشتری یافت نشد.", backKb());
+   568→   568→    return;
+   569→   569→  }
+   570→   570→  await show(ctx, text, customerActionsKb(phone));
+   571→   571→}
+   572→   572→
+   573→   573→// Show all orders of a customer (reuses order list view)
+   574→   574→export async function handleCustomerOrders(ctx: Context) {
+   575→   575→  const phone = cbPayload(ctx);
+   576→   576→  const orders = await db.order.findMany({
+   577→   577→    where: { customerPhone: phone },
+   578→   578→    orderBy: { createdAt: "desc" },
+   579→   579→    select: {
+   580→   580→      orderNumber: true,
+   581→   581→      customerName: true,
+   582→   582→      finalAmount: true,
+   583→   583→      customerPhone: true,
+   584→   584→    },
+   585→   585→  });
+   586→   586→  if (orders.length === 0) {
+   587→   587→    await show(ctx, "❌ سفارشی برای این مشتری یافت نشد.", customerActionsKb(phone));
+   588→   588→    return;
+   589→   589→  }
+   590→   590→  const kb = new InlineKeyboard();
+   591→   591→  for (const o of orders) {
+   592→   592→    kb.text(`${o.orderNumber} | ${o.customerName}`, `o:${o.orderNumber}`).row();
+   593→   593→  }
+   594→   594→  kb.text("🔙 بازگشت به مشتری", `c:${phone}`);
+   595→   595→  await show(
+   596→   596→    ctx,
+   597→   597→    `📋 <b>سفارش‌های مشتری</b>\n📱 <code>${toPersianDigits(phone)}</code>\n\n${toPersianDigits(orders.length)} سفارش:`,
+   598→   598→    kb
+   599→   599→  );
+   600→   600→}
+   601→   601→
+   602→   602→// ── Products ─────────────────────────────────────────────────────────
+   603→   603→export async function handleProducts(ctx: Context) {
+   604→   604→  clearState(ctx.from?.id || 0);
+   605→   605→  const page = cbPage(ctx);
+   606→   606→  const { text, totalPages, products } = await productListMessage(page);
+   607→   607→  const kb = productListKb(products, page, totalPages);
+   608→   608→  await show(ctx, text, kb);
+   609→   609→}
+   610→   610→
+   611→   611→export async function handleProductDetails(ctx: Context) {
+   612→   612→  const slug = cbPayload(ctx);
+   613→   613→  try {
+   614→   614→    await ctx.editMessageText("⏳ در حال بارگذاری...", { parse_mode: "HTML" });
+   615→   615→  } catch {}
+   616→   616→  const p = await db.product.findUnique({
+   617→   617→    where: { slug },
+   618→   618→    select: { slug: true, name: true, featured: true },
+   619→   619→  });
+   620→   620→  if (!p) {
+   621→   621→    await show(ctx, "❌ محصول یافت نشد.", backKb());
+   622→   622→    return;
+   623→   623→  }
+   624→   624→  const text = await productDetailsMessage(slug);
+   625→   625→  await show(ctx, text || "❌ خطا در بارگذاری محصول.", productActionsKb(slug, p.featured));
+   626→   626→}
+   627→   627→
+   628→   628→// Toggle featured status
+   629→   629→export async function handleProductToggleFeatured(ctx: Context) {
+   630→   630→  const slug = cbPayload(ctx);
+   631→   631→  const p = await db.product.findUnique({
+   632→   632→    where: { slug },
+   633→   633→    select: { featured: true, name: true },
+   634→   634→  });
+   635→   635→  if (!p) {
+   636→   636→    await show(ctx, "❌ محصول یافت نشد.", backKb());
+   637→   637→    return;
+   638→   638→  }
+   639→   639→  await db.product.update({
+   640→   640→    where: { slug },
+   641→   641→    data: { featured: !p.featured },
+   642→   642→  });
+   643→   643→  const text = await productDetailsMessage(slug);
+   644→   644→  await show(
+   645→   645→    ctx,
+   646→   646→    `✅ محصول «${escapeHtml(p.name)}» ${p.featured ? "از ویژه‌ها حذف شد" : "به ویژه‌ها اضافه شد"}.\n\n🌐 این تغییر بلافاصله در سایت اعمال می‌شود.\n\n${text || ""}`,
+   647→   647→    productActionsKb(slug, !p.featured)
+   648→   648→  );
+   649→   649→  console.log(`⭐ Product featured: ${slug} → ${!p.featured}`);
+   650→   650→}
+   651→   651→
+   652→   652→// ── Product price edit ───────────────────────────────────────────────
+   653→   653→export async function handleProductEditPrice(ctx: Context) {
+   654→   654→  const slug = cbPayload(ctx);
+   655→   655→  const product = await db.product.findUnique({
+   656→   656→    where: { slug },
+   657→   657→    select: { name: true, pricePerKg: true },
+   658→   658→  });
+   659→   659→  if (!product) {
+   660→   660→    await show(ctx, "❌ محصول یافت نشد.", backKb());
+   661→   661→    return;
+   662→   662→  }
+   663→   663→  userState.set(ctx.from!.id, { action: "edit_price", slug });
+   664→   664→  await show(
+   665→   665→    ctx,
+   666→   666→    `✏️ <b>ویرایش قیمت محصول</b>\n\n` +
+   667→   667→      `🍯 ${escapeHtml(product.name)}\n` +
+   668→   668→      `💰 قیمت فعلی هر کیلو: <b>${formatToman(product.pricePerKg)}</b>\n\n` +
+   669→   669→      `قیمت جدید را به <b>تومان</b> وارد کنید (فقط عدد):\n` +
+   670→   670→      `مثال: <code>1500000</code>\n\n` +
+   671→   671→      `⚠️ ارقام فارسی هم قابل قبول است.\n` +
+   672→   672→      `برای لغو، روی دکمه زیر بزنید.`,
+   673→   673→    editPriceCancelKb(slug)
+   674→   674→  );
+   675→   675→}
+   676→   676→
+   677→   677→// ── Product description edit ─────────────────────────────────────────
+   678→   678→export async function handleProductEditDesc(ctx: Context) {
+   679→   679→  const slug = cbPayload(ctx);
+   680→   680→  const product = await db.product.findUnique({
+   681→   681→    where: { slug },
+   682→   682→    select: { name: true, description: true },
+   683→   683→  });
+   684→   684→  if (!product) {
+   685→   685→    await show(ctx, "❌ محصول یافت نشد.", backKb());
+   686→   686→    return;
+   687→   687→  }
+   688→   688→  userState.set(ctx.from!.id, { action: "edit_desc", slug });
+   689→   689→  await show(
+   690→   690→    ctx,
+   691→   691→    `📝 <b>ویرایش توضیحات محصول</b>\n\n` +
+   692→   692→      `🍯 ${escapeHtml(product.name)}\n` +
+   693→   693→      `📝 توضیحات فعلی:\n${escapeHtml(product.description)}\n\n` +
+   694→   694→      `توضیحات جدید را ارسال کنید:\n\n` +
+   695→   695→      `⚠️ برای لغو، روی دکمه زیر بزنید.`,
+   696→   696→    new InlineKeyboard().text("❌ لغو", `pd:${slug}`)
+   697→   697→  );
+   698→   698→}
+   699→   699→
+   700→   700→// ── Search ───────────────────────────────────────────────────────────
+   701→   701→export async function handleSearch(ctx: Context) {
+   702→   702→  await show(
+   703→   703→    ctx,
+   704→   704→    `🔍 <b>جستجوی سفارش</b>\n\n` +
+   705→   705→      `شماره سفارش، شماره تلفن، یا نام مشتری را ارسال کنید.\n\n` +
+   706→   706→      `💡 <b>نمونه‌ها:</b>\n` +
+   707→   707→      `• شماره سفارش: <code>12345</code> یا <code>HN-12345</code>\n` +
+   708→   708→      `• شماره تلفن: <code>09123456789</code>\n` +
+   709→   709→      `• نام مشتری: <code>علی</code>\n\n` +
+   710→   710→      `📝 ارقام فارسی هم پشتیبانی می‌شوند.\n` +
+   711→   711→      `همچنین می‌توانید مستقیماً متن را ارسال کنید — همیشه به عنوان جستجو در نظر گرفته می‌شود.`,
+   712→   712→    backKb()
+   713→   713→  );
+   714→   714→}
+   715→   715→
+   716→   716→// ── Text message handler (search + price/desc edit) ──────────────────
+   717→   717→export async function handleTextMessage(ctx: Context) {
+   718→   718→  const text = ctx.message?.text || "";
+   719→   719→  const userId = ctx.from!.id;
+   720→   720→
+   721→   721→  // Check if in a multi-step flow
+   722→   722→  const state = userState.get(userId);
+   723→   723→  if (state && state.action === "edit_price") {
+   724→   724→    clearState(userId);
+   725→   725→    // Convert Persian/Arabic digits to ASCII, then validate.
+   726→   726→    // IMPORTANT: We must reject negative numbers, decimals, and any non-digit
+   727→   727→    // characters. The old code used .replace(/[^\d]/g, "") which STRIPPED
+   728→   728→    // the minus sign, turning "-100" into "100" (a valid positive price!).
+   729→   729→    // Now we require the input to be purely digits (after whitespace removal).
+   730→   730→    const asciiText = toAsciiDigits(text).replace(/\s/g, "");
+   731→   731→    if (!/^\d+$/.test(asciiText)) {
+   732→   732→      await ctx.reply(
+   733→   733→        "❌ قیمت نامعتبر است. لطفاً یک عدد صحیح مثبت وارد کنید (فقط ارقام، بدون علامت یا کاما).",
+   734→   734→        { reply_markup: productActionsKb(state.slug), parse_mode: "HTML" }
+   735→   735→      );
+   736→   736→      return;
+   737→   737→    }
+   738→   738→    const price = parseInt(asciiText, 10);
+   739→   739→    if (isNaN(price) || price <= 0) {
+   740→   740→      await ctx.reply(
+   741→   741→        "❌ قیمت نامعتبر است. لطفاً یک عدد صحیح مثبت وارد کنید.",
+   742→   742→        { reply_markup: productActionsKb(state.slug), parse_mode: "HTML" }
+   743→   743→      );
+   744→   744→      return;
+   745→   745→    }
+   746→   746→    if (price > 1_000_000_000) {
+   747→   747→      await ctx.reply(
+   748→   748→        "❌ قیمت بیش از حد بزرگ است. لطفاً مقدار را بررسی کنید.",
+   749→   749→        { reply_markup: productActionsKb(state.slug), parse_mode: "HTML" }
+   750→   750→      );
+   751→   751→      return;
+   752→   752→    }
+   753→   753→    // Fetch old price for the diff message
+   754→   754→    const before = await db.product.findUnique({
+   755→   755→      where: { slug: state.slug },
+   756→   756→      select: { name: true, pricePerKg: true, featured: true },
+   757→   757→    });
+   758→   758→    if (!before) {
+   759→   759→      await ctx.reply("❌ محصول یافت نشد.", backKb());
+   760→   760→      return;
+   761→   761→    }
+   762→   762→    await db.product.update({
+   763→   763→      where: { slug: state.slug },
+   764→   764→      data: { pricePerKg: price },
+   765→   765→    });
+   766→   766→    const detailText = await productDetailsMessage(state.slug);
+   767→   767→    const diff = price - (before.pricePerKg || 0);
+   768→   768→    const diffStr =
+   769→   769→      diff === 0
+   770→   770→        ? "بدون تغییر"
+   771→   771→        : diff > 0
+   772→   772→        ? `🔺 افزایش: +${formatToman(diff)}`
+   773→   773→        : `🔻 کاهش: ${formatToman(Math.abs(diff))}`;
+   774→   774→    await ctx.reply(
+   775→   775→      `✅ <b>قیمت محصول به‌روزرسانی شد</b>\n\n` +
+   776→   776→        `🍯 ${escapeHtml(before.name)}\n` +
+   777→   777→        `💰 قیمت قبلی: ${formatToman(before.pricePerKg)}\n` +
+   778→   778→        `💰 قیمت جدید: <b>${formatToman(price)}</b>\n` +
+   779→   779→        `📊 ${diffStr}\n\n` +
+   780→   780→        `🌐 این تغییر بلافاصله در سایت اعمال می‌شود.\n\n${detailText || ""}`,
+   781→   781→      { parse_mode: "HTML", reply_markup: productActionsKb(state.slug, before.featured) }
+   782→   782→    );
+   783→   783→    console.log(
+   784→   784→      `💰 Product price: ${state.slug} ${before.pricePerKg} → ${price}`
+   785→   785→    );
+   786→   786→    return;
+   787→   787→  }
+   788→   788→
+   789→   789→  if (state && state.action === "edit_desc") {
+   790→   790→    clearState(userId);
+   791→   791→    if (!text.trim()) {
+   792→   792→      await ctx.reply(
+   793→   793→        "❌ توضیحات نمی‌تواند خالی باشد.",
+   794→   794→        { reply_markup: productActionsKb(state.slug), parse_mode: "HTML" }
+   795→   795→      );
+   796→   796→      return;
+   797→   797→    }
+   798→   798→    await db.product.update({
+   799→   799→      where: { slug: state.slug },
+   800→   800→      data: { description: text.trim() },
+   801→   801→    });
+   802→   802→    const product = await db.product.findUnique({
+   803→   803→      where: { slug: state.slug },
+   804→   804→      select: { name: true, featured: true },
+   805→   805→    });
+   806→   806→    const detailText = await productDetailsMessage(state.slug);
+   807→   807→    await ctx.reply(
+   808→   808→      `✅ توضیحات محصول «${escapeHtml(product?.name || "")}» به‌روزرسانی شد.\n\n🌐 این تغییر بلافاصله در سایت اعمال می‌شود.\n\n${detailText || ""}`,
+   809→   809→      { parse_mode: "HTML", reply_markup: productActionsKb(state.slug, product?.featured || false) }
+   810→   810→    );
+   811→   811→    console.log(`📝 Product desc updated: ${state.slug}`);
+   812→   812→    return;
+   813→   813→  }
+   814→   814→
+   815→   815→  // Tracking code entry flow — when admin is setting an order to "shipped"
+   816→   816→  // (تحویل به پست), they must enter the post tracking code.
+   817→   817→  if (state && state.action === "enter_tracking") {
+   818→   818→    const orderNumber = state.orderNumber;
+   819→   819→    clearState(userId);
+   820→   820→    // Normalize: convert Persian/Arabic digits to ASCII, strip whitespace.
+   821→   821→    // Tracking codes are typically all digits (13-20 digits for Iran Post),
+   822→   822→    // but we also allow letters (some registered post uses letters).
+   823→   823→    const normalized = toAsciiDigits(text).replace(/\s+/g, "");
+   824→   824→    // Validation: length 8-30, only alphanumeric
+   825→   825→    if (!/^[A-Za-z0-9]{8,30}$/.test(normalized)) {
+   826→   826→      await ctx.reply(
+   827→   827→        "❌ کد رهگیری نامعتبر است.\n\n" +
+   828→   828→          "کد رهگیری باید:\n" +
+   829→   829→          "• بین ۸ تا ۳۰ نویسه باشد\n" +
+   830→   830→          "• فقط شامل ارقام و حروف انگلیسی باشد\n" +
+   831→   831→          "• بدون فاصله یا کاراکتر خاص باشد\n\n" +
+   832→   832→          "لطفاً کد رهگیری صحیح را ارسال کنید یا روی «بدون کد رهگیری» بزنید.",
+   833→   833→        { parse_mode: "HTML", reply_markup: trackingEntryKb(orderNumber) }
+   834→   834→      );
+   835→   835→      // Re-set state so the next message is treated as another attempt
+   836→   836→      userState.set(userId, { action: "enter_tracking", orderNumber });
+   837→   837→      return;
+   838→   838→    }
+   839→   839→    try {
+   840→   840→      const order = await withRetry(
+   841→   841→        () => db.order.findUnique({
+   842→   842→          where: { orderNumber },
+   843→   843→          select: { id: true, customerName: true, orderStatus: true },
+   844→   844→        }),
+   845→   845→        { label: `findOrderTracking(${orderNumber})` }
+   846→   846→      );
+   847→   847→      if (!order) {
+   848→   848→        await ctx.reply("❌ سفارش یافت نشد.", { reply_markup: backKb(), parse_mode: "HTML" });
+   849→   849→        return;
+   850→   850→      }
+   851→   851→      await withRetry(
+   852→   852→        () => db.order.update({
+   853→   853→          where: { id: order.id },
+   854→   854→          data: {
+   855→   855→            orderStatus: "shipped",
+   856→   856→            paymentStatus: "confirmed",
+   857→   857→            trackingCode: normalized,
+   858→   858→          },
+   859→   859→        }),
+   860→   860→        { label: `updateOrderTracking(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+   861→   861→      );
+   862→   862→      console.log(
+   863→   863→        `📊 Status change: ${orderNumber} ${order.orderStatus} → shipped (tracking: ${normalized})`
+   864→   864→      );
+   865→   865→      const detailText = await orderDetailsMessage(orderNumber);
+   866→   866→      await ctx.reply(
+   867→   867→        `✅ <b>سفارش به پست تحویل داده شد</b>\n\n` +
+   868→   868→          `📋 <code>${orderNumber}</code>\n` +
+   869→   869→          `👤 ${escapeHtml(order.customerName)}\n` +
+   870→   870→          `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
+   871→   871→          `📊 وضعیت جدید: ${statusLabel("shipped")}\n` +
+   872→   872→          `📮 کد رهگیری: <code>${escapeHtml(normalized)}</code>\n\n` +
+   873→   873→          `🌐 مشتری می‌تواند با این کد رهگیری، وضعیت لحظه‌ای بسته را در سامانه پست پیگیری کند.\n\n` +
+   874→   874→          (detailText || ""),
+   875→   875→        { parse_mode: "HTML", reply_markup: orderActionsKb(orderNumber, "shipped") }
+   876→   876→      );
+   877→   877→    } catch (e: any) {
+   878→   878→      const errCode = e?.code || e?.errno || "N/A";
+   879→   879→      const errMsg = String(e?.message || e).slice(0, 300);
+   880→   880→      console.error(
+   881→   881→        `❌ enter_tracking FAILED for ${orderNumber} | code=${errCode} | msg=${errMsg}`
+   882→   882→      );
+   883→   883→      await ctx.reply(
+   884→   884→        `❌ خطا در ثبت کد رهگیری.\n\n⚠️ خطا: <code>${errCode}</code>\n\nلطفاً دوباره تلاش کنید.`,
+   885→   885→        { parse_mode: "HTML", reply_markup: backKb() }
+   886→   886→      );
+   887→   887→    }
+   888→   888→    return;
+   889→   889→  }
+   890→   890→
+   891→   891→  // Default: treat as search
+   892→   892→  const query = text.trim();
+   893→   893→  if (!query) return;
+   894→   894→  try {
+   895→   895→    await ctx.reply("⏳ در حال جستجو...", { parse_mode: "HTML" });
+   896→   896→  } catch {}
+   897→   897→  const msg = await searchMessage(query);
+   898→   898→  const orders = await searchOrders(query);
+   899→   899→  let kb = backKb();
+   900→   900→  if (orders.length > 0) {
+   901→   901→    kb = new InlineKeyboard();
+   902→   902→    for (const o of orders) {
+   903→   903→      kb.text(`${o.orderNumber} | ${o.customerName}`, `o:${o.orderNumber}`).row();
+   904→   904→    }
+   905→   905→    kb.text("🔙 منوی اصلی", "back");
+   906→   906→  }
+   907→   907→  await ctx.reply(msg, {
+   908→   908→    parse_mode: "HTML",
+   909→   909→    reply_markup: kb,
+   910→   910→    disable_web_page_preview: true,
+   911→   911→  });
+   912→   912→}
+   913→   913→
+   914→   914→// ── Noop (for info buttons / pagination indicator) ───────────────────
+   915→   915→export async function handleNoop(_ctx: Context) {
+   916→   916→  // Do nothing — callback already answered by middleware
+   917→   917→}
+   918→   918→
+   919→   919→// Export state for external clearing
+   920→   920→export { userState, clearState };
+   921→   921→
