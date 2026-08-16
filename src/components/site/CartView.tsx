@@ -66,6 +66,7 @@ export function CartView() {
   const [submitting, setSubmitting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [orderCopied, setOrderCopied] = useState(false);
 
   // form state
   const [name, setName] = useState("");
@@ -94,6 +95,14 @@ export function CartView() {
     setCopied(true);
     toast.success("شماره کارت کپی شد");
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const copyOrderNumber = () => {
+    if (!orderResult) return;
+    navigator.clipboard.writeText(orderResult.orderNumber);
+    setOrderCopied(true);
+    toast.success("شماره سفارش کپی شد");
+    setTimeout(() => setOrderCopied(false), 2000);
   };
 
   const submitOrder = async () => {
@@ -264,12 +273,19 @@ export function CartView() {
                   {toPersianDigits(orderResult.orderNumber)}
                 </div>
               </div>
-              <Badge className="bg-honey-gradient text-primary-foreground border-0">
-                <Truck className="w-3.5 h-3.5 ml-1" />
-                {orderResult.deliveryType === "shahrekord"
-                  ? "ارسال رایگان (شهرکرد)"
-                  : "ارسال پستی"}
-              </Badge>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={copyOrderNumber}
+                className="border-honey text-honey-dark hover:bg-honey hover:text-primary-foreground"
+              >
+                {orderCopied ? (
+                  <Check className="w-4 h-4 ml-1" />
+                ) : (
+                  <Copy className="w-4 h-4 ml-1" />
+                )}
+                {orderCopied ? "کپی شد" : "کپی شماره سفارش"}
+              </Button>
             </div>
           </Card>
 
@@ -313,10 +329,45 @@ export function CartView() {
                 </div>
               </div>
 
-              {/* Amount breakdown */}
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between text-muted-foreground">
-                  <span>مبلغ کالاها</span>
+              {/* Itemized breakdown */}
+              <div className="space-y-3 text-sm">
+                <div className="font-bold text-foreground mb-1">
+                  ریز اقلام سفارش
+                </div>
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start justify-between gap-2 py-2 border-b border-border/40 last:border-0"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-foreground">
+                          {item.productName}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {item.containerLabel}
+                          {item.hasWax && " • با موم عسل"}
+                          {" • "}
+                          {toPersianDigits(item.quantity)} عدد
+                          {" • "}
+                          {toPersianDigits(item.containerSize * item.quantity)}{" "}
+                          کیلو
+                        </div>
+                      </div>
+                      <div className="text-left shrink-0">
+                        <div className="font-bold text-honey-dark">
+                          {formatToman(item.unitPrice * item.quantity)}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {formatToman(item.unitPrice)} ×{" "}
+                          {toPersianDigits(item.quantity)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between text-muted-foreground pt-1">
+                  <span>جمع کالاها</span>
                   <span>{formatToman(orderResult.totalAmount)}</span>
                 </div>
                 <div className="flex justify-between text-muted-foreground">
@@ -325,7 +376,7 @@ export function CartView() {
                     +{toPersianDigits(orderResult.uniqueAmount)} تومان
                   </span>
                 </div>
-                <Separator className="my-2" />
+                <Separator className="my-1" />
                 <div className="flex justify-between items-center bg-accent/50 rounded-lg p-3">
                   <div>
                     <div className="font-bold text-foreground">

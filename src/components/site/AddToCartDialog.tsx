@@ -141,11 +141,11 @@ export function AddToCartDialog({
                   htmlFor="wax-switch"
                   className="text-sm font-bold cursor-pointer flex items-center gap-1.5"
                 >
-                  درب با موم (مومی)
+                  با موم عسل
                 </Label>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {container.canWax
-                    ? "ظرف با موم مومی و ضددرز تحویل می‌شود"
+                    ? "عسل به همراه موم طبیعی عرضه می‌شود"
                     : "تنها ظرف ۱ کیلویی قابلیت انتخاب موم دارد"}
                 </p>
               </div>

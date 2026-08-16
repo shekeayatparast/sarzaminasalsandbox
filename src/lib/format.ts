@@ -38,3 +38,29 @@ export function generateOrderNumber(): string {
 export function containerPrice(pricePerKg: number, sizeKg: number): number {
   return Math.round(pricePerKg * sizeKg);
 }
+
+// Order status labels (Persian)
+export const ORDER_STATUS_LABELS: Record<string, string> = {
+  awaiting_payment: "در انتظار پرداخت",
+  paid: "پرداخت ثبت شد",
+  confirmed: "تأیید مدیریت",
+  preparing: "در حال آماده‌سازی",
+  shipped: "ارسال شد",
+  delivered: "تحویل داده شد",
+  cancelled: "لغو شد",
+};
+
+// Order status → step index (for progress display)
+export const ORDER_STATUS_STEPS = [
+  "awaiting_payment",
+  "paid",
+  "confirmed",
+  "preparing",
+  "shipped",
+  "delivered",
+] as const;
+
+export function statusStepIndex(status: string): number {
+  const idx = ORDER_STATUS_STEPS.indexOf(status as any);
+  return idx >= 0 ? idx : -1; // -1 = cancelled or unknown
+}

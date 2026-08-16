@@ -60,7 +60,6 @@ const HONEY_TYPES = [
   {
     name: "عسل گون",
     color: "bg-honey-light/30",
-    badge: "طلایی روشن",
     benefits: [
       "تقویت سیستم ایمنی بدن",
       "افزایش انرژی و رفع خستگی",
@@ -72,7 +71,6 @@ const HONEY_TYPES = [
   {
     name: "عسل کنار",
     color: "bg-honey/20",
-    badge: "کهربایی تیره",
     benefits: [
       "خواص درمانی فراوان",
       "تقویت قوای جنسی",
@@ -84,7 +82,6 @@ const HONEY_TYPES = [
   {
     name: "عسل چند گیاه",
     color: "bg-honey-light/25",
-    badge: "کهربایی متوسط",
     benefits: [
       "ترکیب خواص چندین گیاه دارویی",
       "تقویت عمومی بدن",
@@ -114,7 +111,7 @@ const FAQ = [
   },
   {
     q: "تفاوت عسل گون، کنار و چند گیاه چیست؟",
-    a: "تفاوت در نوع گل و گیاهی است که زنبور از شهد آن استفاده می‌کند. عسل گون از گل گون، عسل کنار از درخت سدر و عسل چند گیاه از ترکیب گل‌های مختلف به دست می‌آید. هر کدام طعم، رنگ و خواص منحصربه‌فرد خود را دارند.",
+    a: "تفاوت در نوع گل و گیاهی است که زنبور از شهد آن استفاده می‌کند. عسل گون از گل گون، عسل کنار از درخت سدر و عسل چند گیاه از ترکیب گل‌های مختلف به دست می‌آید. هر کدام طعم و خواص منحصربه‌فرد خود را دارند.",
   },
   {
     q: "نحوه نگهداری عسل چگونه است؟",
@@ -203,14 +200,9 @@ export function BenefitsView() {
                 key={h.name}
                 className={`p-6 ${h.color} border-honey/30 hover:shadow-lg transition-shadow`}
               >
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-extrabold text-xl text-honey-dark">
-                    {h.name}
-                  </h3>
-                  <Badge className="bg-honey-gradient text-primary-foreground border-0 text-xs">
-                    {h.badge}
-                  </Badge>
-                </div>
+                <h3 className="font-extrabold text-xl text-honey-dark mb-4">
+                  {h.name}
+                </h3>
                 <ul className="space-y-2.5">
                   {h.benefits.map((b) => (
                     <li key={b} className="flex items-start gap-2">

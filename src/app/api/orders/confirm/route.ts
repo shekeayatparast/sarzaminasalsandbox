@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
 
     await db.order.update({
       where: { id: order.id },
-      data: { paymentStatus: "confirmed" },
+      data: { paymentStatus: "confirmed", orderStatus: "paid" },
     });
 
     return NextResponse.json({

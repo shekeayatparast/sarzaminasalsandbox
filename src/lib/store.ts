@@ -10,7 +10,8 @@ export type ViewName =
   | "about"
   | "benefits"
   | "cart"
-  | "contact";
+  | "contact"
+  | "track";
 
 interface NavState {
   view: ViewName;

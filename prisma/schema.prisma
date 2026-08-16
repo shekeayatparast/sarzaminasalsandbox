@@ -39,6 +39,7 @@ model Order {
   uniqueAmount    Int         // مبلغ یکتای اضافه (۱ تا ۹۹۹ تومان)
   finalAmount     Int         // مبلغ نهایی قابل پرداخت (ریال = finalAmount*10)
   paymentStatus   String      @default("pending") // pending | confirmed
+  orderStatus     String      @default("awaiting_payment") // awaiting_payment | paid | confirmed | preparing | shipped | delivered | cancelled
   deliveryType    String      // shahrekord (رایگان) | post (پستی)
   notes           String?     // یادداشت مشتری
   createdAt       DateTime    @default(now())

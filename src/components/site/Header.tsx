@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { key: "products", label: "محصولات" },
   { key: "benefits", label: "خواص عسل" },
   { key: "about", label: "درباره ما" },
+  { key: "track", label: "پیگیری سفارش" },
   { key: "contact", label: "تماس با ما" },
 ] as const;
 

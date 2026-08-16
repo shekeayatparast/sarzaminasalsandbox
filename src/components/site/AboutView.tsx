@@ -41,7 +41,7 @@ const VALUES = [
 ];
 
 const STATS = [
-  { value: "+۲۰", label: "سال تجربه" },
+  { value: "۳۱", label: "استان تحت پوشش" },
   { value: "+۵۰۰۰", label: "مشتری راضی" },
   { value: "۳", label: "نوع عسل ویژه" },
   { value: "۱۰۰٪", label: "طبیعی و خالص" },
@@ -96,6 +96,7 @@ export function AboutView() {
               />
             </div>
           </div>
+          {/* (removed floating "+۲۰ سال تجربه" badge per customer request) */}
           <div className="order-1 md:order-2">
             <Badge className="bg-accent text-accent-foreground border-0 mb-3">
               شروع داستان ما

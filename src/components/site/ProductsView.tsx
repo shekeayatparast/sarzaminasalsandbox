@@ -6,9 +6,7 @@ import { ProductCard } from "./ProductCard";
 import { AddToCartDialog } from "./AddToCartDialog";
 import { Button } from "@/components/ui/button";
 import { useNav } from "@/lib/store";
-import { ShoppingBasket, Loader2, Sparkles } from "lucide-react";
-import { CONTAINERS } from "@/lib/products";
-import { toPersianDigits } from "@/lib/format";
+import { Loader2, Sparkles } from "lucide-react";
 
 export function ProductsView() {
   const { navigate } = useNav();
@@ -48,32 +46,6 @@ export function ProductsView() {
       </section>
 
       <div className="container mx-auto px-4 py-10 md:py-14">
-        {/* Container options info */}
-        <div className="mb-8 rounded-2xl bg-card border border-border p-5 md:p-6 shadow-sm">
-          <div className="flex items-center gap-2 mb-3">
-            <ShoppingBasket className="w-5 h-5 text-honey" />
-            <h2 className="font-bold text-lg text-honey-dark">
-              ظروف موجود برای خرید
-            </h2>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {CONTAINERS.map((c) => (
-              <span
-                key={c.size}
-                className="px-3 py-1.5 rounded-full bg-accent text-accent-foreground text-sm font-medium border border-border/60"
-              >
-                {c.label}
-                {c.canWax && " (با موم)"}
-              </span>
-            ))}
-          </div>
-          <p className="text-sm text-muted-foreground mt-3 leading-relaxed">
-            💡 به ازای هر {toPersianDigits(5)} کیلو خرید غیرعمده،{" "}
-            {toPersianDigits(0.5)} کیلو عسل به عنوان هدیه دریافت می‌کنید.
-            تحویل در شهرکرد رایگان است.
-          </p>
-        </div>
-
         {/* Products grid */}
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">

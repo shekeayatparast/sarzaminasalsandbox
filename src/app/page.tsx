@@ -10,6 +10,7 @@ import { AboutView } from "@/components/site/AboutView";
 import { BenefitsView } from "@/components/site/BenefitsView";
 import { CartView } from "@/components/site/CartView";
 import { ContactView } from "@/components/site/ContactView";
+import { TrackOrdersView } from "@/components/site/TrackOrdersView";
 
 export default function Home() {
   const view = useNav((s) => s.view);
@@ -29,6 +30,7 @@ export default function Home() {
         {view === "benefits" && <BenefitsView />}
         {view === "cart" && <CartView />}
         {view === "contact" && <ContactView />}
+        {view === "track" && <TrackOrdersView />}
       </main>
       <Footer />
     </div>

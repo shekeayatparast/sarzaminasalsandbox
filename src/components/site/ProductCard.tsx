@@ -2,7 +2,6 @@
 
 import { Product } from "@prisma/client";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatToman, toPersianDigits } from "@/lib/format";
 import { useNav } from "@/lib/store";
@@ -27,9 +26,6 @@ export function ProductCard({
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
           loading="lazy"
         />
-        <Badge className="absolute top-3 right-3 bg-honey-gradient text-primary-foreground shadow-md border-0">
-          {product.color}
-        </Badge>
       </div>
 
       {/* Content */}
