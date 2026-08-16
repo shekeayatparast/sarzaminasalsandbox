@@ -64,3 +64,70 @@ export function statusStepIndex(status: string): number {
   const idx = ORDER_STATUS_STEPS.indexOf(status as any);
   return idx >= 0 ? idx : -1; // -1 = cancelled or unknown
 }
+
+// ── Date / time (Iran timezone + Jalali calendar) ────────────────────
+// The site may be viewed from any timezone, but ALL dates must be shown
+// in Iran Standard Time (Asia/Tehran, UTC+03:30, no DST since 2022)
+// using the Persian (Jalali / Shamsi) calendar — never the viewer's
+// local time, never the Gregorian calendar.
+export const IRAN_TZ = "Asia/Tehran";
+
+/** Format a Date as a Persian (Jalali) date-time string in Iran time. */
+export function formatJalaliDateTime(d: Date | string): string {
+  const date = typeof d === "string" ? new Date(d) : d;
+  try {
+    return new Intl.DateTimeFormat("fa-IR", {
+      timeZone: IRAN_TZ,
+      calendar: "persian",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return date.toLocaleString("fa-IR", { timeZone: IRAN_TZ });
+  }
+}
+
+/** Format a Date as a Persian (Jalali) date only (no time) in Iran time. */
+export function formatJalaliDate(d: Date | string): string {
+  const date = typeof d === "string" ? new Date(d) : d;
+  try {
+    return new Intl.DateTimeFormat("fa-IR", {
+      timeZone: IRAN_TZ,
+      calendar: "persian",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }).format(date);
+  } catch {
+    return date.toLocaleDateString("fa-IR", { timeZone: IRAN_TZ });
+  }
+}
+
+/** Format a Date as Persian time-only (HH:MM:SS) in Iran time. */
+export function formatJalaliTime(d: Date | string): string {
+  const date = typeof d === "string" ? new Date(d) : d;
+  try {
+    return new Intl.DateTimeFormat("fa-IR", {
+      timeZone: IRAN_TZ,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return date.toLocaleTimeString("fa-IR", { timeZone: IRAN_TZ });
+  }
+}
+
+/** Returns the current Jalali (Shamsi) year as a Persian-digit string, e.g. "۱۴۰۳". */
+export function currentJalaliYear(): string {
+  return new Intl.DateTimeFormat("fa-IR", {
+    timeZone: IRAN_TZ,
+    calendar: "persian",
+    year: "numeric",
+  }).format(new Date());
+}

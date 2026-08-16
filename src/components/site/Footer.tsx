@@ -4,6 +4,7 @@ import { useNav } from "@/lib/store";
 import { Phone, MapPin } from "lucide-react";
 import Image from "next/image";
 import { CONTACT_PHONE, CONTACT_PHONE_RAW } from "@/lib/products";
+import { currentJalaliYear } from "@/lib/format";
 
 const NAV_LINKS = [
   { key: "home", label: "خانه" },
@@ -91,7 +92,7 @@ export function Footer() {
         <div className="mt-8 pt-6 border-t border-primary-foreground/15 text-center text-xs text-primary-foreground/50">
           <p>
             تمامی حقوق این وب‌سایت متعلق به فروشگاه «سرزمین عسل» می‌باشد. ©
-            ۱۴۰۳
+            {currentJalaliYear()}
           </p>
         </div>
       </div>

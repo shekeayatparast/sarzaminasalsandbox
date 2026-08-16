@@ -545,3 +545,41 @@ Stage Summary:
 - Admin is actively testing the bot right now — successfully changed HN-65950 from paid → confirmed via the bot's "✅ تأیید پرداخت" button.
 - Full bidirectional sync verified: site → bot (order + payment notifications), bot → site (status changes reflected on tracking page via 15s auto-poll).
 - Bot is live at @MeowAboosBot, port 3003, all systems healthy. Site live on port 3000, lint clean, no console warnings.
+
+---
+Task ID: fix-11
+Agent: main (orchestrator)
+Task: Convert ALL date/time usage in the project to Iran time (Asia/Tehran) + Persian/Shamsi (Jalali) calendar
+
+Work Log:
+- AUDIT: Searched entire project for date/time usage. Found 3 categories of issues:
+  1. DISPLAY formatting: `Intl.DateTimeFormat("fa-IR", ...)` without `timeZone` → used server/browser local time, NOT Iran time. Server runs in UTC, so bot dates were 3.5 hours behind Iran.
+  2. STATS boundaries: `new Date(); setHours(0,0,0,0)` computed "today/week/month" start in server-local (UTC) time, not Iran time. This meant "today's orders" was wrong by 3.5 hours.
+  3. HARDCODED year: Footer had static "©۱۴۰۳" Jalali year.
+
+- BOT FIXES (mini-services/telegram-bot/src/):
+  • format.ts: Added `timeZone: "Asia/Tehran"` + `calendar: "persian"` + `hour12: false` to `faDate()`, `faDateShort()`, and new `faTime()`. Added `IRAN_TZ` constant. Added 3 boundary helpers:
+    - `startOfTodayIran()`: midnight Iran time today (uses en-CA locale → YYYY-MM-DD → T00:00:00+03:30)
+    - `startOfWeekIran()`: last Saturday midnight Iran (uses weekday short-name → Sat-offset map)
+    - `startOfMonthIran()`: 1st day of current Jalali month midnight Iran (reads Jalali day-of-month via persian calendar, walks back day−1 days)
+  • messages.ts: `statsMessage()` now uses `startOfTodayIran/Week/Month` instead of `new Date()+setHours`. "This month" now correctly means the current Jalali (Shamsi) month, not Gregorian month.
+  • handlers.ts: `fetchMainMenuStats()` (welcome menu "today's orders" badge) now uses `startOfTodayIran()`. `handleTodayOrders()` (today's orders list) now uses `startOfTodayIran()` AND `faDateShort(now)` for the date header (was inline `Intl.DateTimeFormat` without timezone).
+
+- SITE FIXES (src/):
+  • lib/format.ts: Added centralized `formatJalaliDateTime()`, `formatJalaliDate()`, `formatJalaliTime()`, `currentJalaliYear()` — all with `timeZone: "Asia/Tehran"` + `calendar: "persian"` + `hour12: false`. Exported `IRAN_TZ` constant.
+  • TrackOrdersView.tsx: Replaced local `formatDate()` (no timezone) with `formatJalaliDateTime()`. Replaced inline `Intl.DateTimeFormat` for last-updated timestamp with `formatJalaliTime()`.
+  • Footer.tsx: Replaced hardcoded "©۱۴۰۳" with dynamic `currentJalaliYear()` (now shows "©۱۴۰۵" for 1405 Jalali).
+
+- VERIFICATION:
+  • Inline test confirmed: UTC 12:59 → Iran 16:29 (correct +3:30 offset). `faDate(now)` = "۲۵ مرداد ۱۴۰۵ ساعت ۱۶:۲۹". `startOfTodayIran` = 20:30 UTC previous day = 00:00 Iran. `startOfWeekIran` = last Saturday 00:00 Iran. `startOfMonthIran` = 1 Mordad 1405 00:00 Iran. All correct.
+  • Bot stats message: date header "📅 ۲۵ مرداد ۱۴۰۵", today/week/month counts all computed from Iran-time boundaries. ✅
+  • Site (Agent Browser): Order dates show "۲۵ مرداد ۱۴۰۵ ساعت ۱۶:۱۷" (Iran time + Jalali). Last-updated timestamp "۱۶:۲۹:۴۴" (Iran time). Footer "©۱۴۰۵" (dynamic). ✅
+  • Bot tests: 104/104 pass (no regressions). ✅
+  • Site lint: 0 errors, 0 warnings. ✅
+  • Bot health: polling=true, crashCount=0, stable (double-fork daemonized to survive session cleanup).
+
+Stage Summary:
+- ALL date/time display in the project now uses Iran Standard Time (Asia/Tehran, UTC+03:30, no DST) and the Persian (Jalali/Shamsi) calendar. This applies to both the customer-facing website and the admin Telegram bot.
+- Critical fix: "today/this week/this month" stats in the bot were previously computed in server-UTC time (3.5 hours off from Iran). Now correctly computed in Iran time. "This month" also correctly means the current Jalali month (not Gregorian).
+- Footer copyright year is now dynamic (auto-updates each Jalali year) instead of hardcoded.
+- Bot is live at @MeowAboosBot, port 3003, polling=true, stable. Site live on port 3000.

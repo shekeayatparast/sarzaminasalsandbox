@@ -27,38 +27,63 @@ export const formatToman = (n: number): string => `${formatNumber(n)} تومان
 /** Format a rial amount (toman × 10): "۱۲٬۰۰۰٬۰۰۰ ریال". */
 export const formatRial = (n: number): string => `${formatNumber(n * 10)} ریال`;
 
-// ── Date / time ──────────────────────────────────────────────────────
-/** Format a Date as a Persian (Jalali) date-time string. */
+// ── Date / time (Iran timezone + Jalali calendar) ────────────────────
+// Server runs in UTC; ALL display + stats boundaries are pinned to
+// Iran Standard Time (Asia/Tehran, UTC+03:30, no DST since 2022).
+export const IRAN_TZ = "Asia/Tehran";
+
+/** Format a Date as a Persian (Jalali) date-time string in Iran time. */
 export const faDate = (d: Date | string): string => {
   const date = typeof d === "string" ? new Date(d) : d;
   try {
     return new Intl.DateTimeFormat("fa-IR", {
+      timeZone: IRAN_TZ,
+      calendar: "persian",
       year: "numeric",
       month: "long",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      hour12: false,
     }).format(date);
   } catch {
-    return date.toLocaleString();
+    return date.toLocaleString("fa-IR", { timeZone: IRAN_TZ });
   }
 };
 
-/** Format a Date as a Persian (Jalali) date only (no time). */
+/** Format a Date as a Persian (Jalali) date only (no time) in Iran time. */
 export const faDateShort = (d: Date | string): string => {
   const date = typeof d === "string" ? new Date(d) : d;
   try {
     return new Intl.DateTimeFormat("fa-IR", {
+      timeZone: IRAN_TZ,
+      calendar: "persian",
       year: "numeric",
       month: "long",
       day: "numeric",
     }).format(date);
   } catch {
-    return date.toLocaleDateString();
+    return date.toLocaleDateString("fa-IR", { timeZone: IRAN_TZ });
   }
 };
 
-/** Format a Date as a relative time ago in Persian. */
+/** Format a Date as Persian time-only (HH:MM:SS) in Iran time. */
+export const faTime = (d: Date | string): string => {
+  const date = typeof d === "string" ? new Date(d) : d;
+  try {
+    return new Intl.DateTimeFormat("fa-IR", {
+      timeZone: IRAN_TZ,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return date.toLocaleTimeString("fa-IR", { timeZone: IRAN_TZ });
+  }
+};
+
+/** Format a Date as a relative time ago in Persian (timezone-independent math). */
 export const faTimeAgo = (d: Date | string): string => {
   const date = typeof d === "string" ? new Date(d) : d;
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -70,6 +95,64 @@ export const faTimeAgo = (d: Date | string): string => {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${toPersianDigits(days)} روز پیش`;
   return faDateShort(date);
+};
+
+// ── Iran-time boundary helpers (for stats queries) ───────────────────
+// Iran does NOT observe DST since 2022, so each day is exactly 86_400_000 ms.
+
+const MS_PER_DAY = 86_400_000;
+
+// Weekday mapping for Iran (week starts Saturday). Intl returns English short names.
+const WEEKDAY_TO_SAT_OFFSET: Record<string, number> = {
+  Sat: 0, Sun: 1, Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6,
+};
+
+/**
+ * Returns the UTC Date corresponding to midnight (00:00:00) of the
+ * current day in Iran time. Use as the lower bound for "today" queries.
+ */
+export const startOfTodayIran = (): Date => {
+  // "en-CA" yields ISO-like YYYY-MM-DD in the given time zone.
+  const iranDateStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: IRAN_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  // midnight in Iran (fixed offset +03:30, no DST)
+  return new Date(`${iranDateStr}T00:00:00+03:30`);
+};
+
+/**
+ * Returns the UTC Date corresponding to midnight (00:00:00) of the
+ * current week's Saturday in Iran time (Iranian week starts on Saturday).
+ */
+export const startOfWeekIran = (): Date => {
+  const todayStart = startOfTodayIran();
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: IRAN_TZ,
+    weekday: "short",
+  }).format(new Date());
+  const daysSinceSat = WEEKDAY_TO_SAT_OFFSET[weekday] ?? 0;
+  return new Date(todayStart.getTime() - daysSinceSat * MS_PER_DAY);
+};
+
+/**
+ * Returns the UTC Date corresponding to midnight (00:00:00) of the
+ * first day of the current Jalali (Shamsi) month in Iran time.
+ * Uses the Persian calendar via Intl to read the current Jalali day-of-month,
+ * then walks back (day − 1) days from today's midnight-Iran instant.
+ */
+export const startOfMonthIran = (): Date => {
+  const todayStart = startOfTodayIran();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: IRAN_TZ,
+    calendar: "persian",
+    day: "numeric",
+  }).formatToParts(new Date());
+  const dayPart = parts.find((p) => p.type === "day");
+  const day = dayPart ? parseInt(dayPart.value, 10) : 1;
+  return new Date(todayStart.getTime() - (day - 1) * MS_PER_DAY);
 };
 
 // ── HTML escape ──────────────────────────────────────────────────────

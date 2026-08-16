@@ -19,6 +19,8 @@ import {
   ORDER_STATUS_LABELS,
   ORDER_STATUS_STEPS,
   statusStepIndex,
+  formatJalaliDateTime,
+  formatJalaliTime,
 } from "@/lib/format";
 import {
   Search,
@@ -84,14 +86,7 @@ const STATUS_STYLE: Record<
 };
 
 function formatDate(d: Date | string): string {
-  const date = new Date(d);
-  return new Intl.DateTimeFormat("fa-IR", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return formatJalaliDateTime(d);
 }
 
 function StatusTracker({ status }: { status: string }) {
@@ -532,11 +527,7 @@ export function TrackOrdersView() {
                   {lastUpdated && (
                     <span className="text-muted-foreground/70 truncate">
                       • آخرین به‌روزرسانی:{" "}
-                      {new Intl.DateTimeFormat("fa-IR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      }).format(lastUpdated)}
+                      {formatJalaliTime(lastUpdated)}
                     </span>
                   )}
                 </div>

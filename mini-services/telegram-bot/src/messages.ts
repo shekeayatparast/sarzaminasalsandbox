@@ -21,6 +21,9 @@ import {
   deliveryLabel,
   STATUS_LABELS,
   normalizeSearchQuery,
+  startOfTodayIran,
+  startOfWeekIran,
+  startOfMonthIran,
 } from "./format.js";
 
 const PAGE_SIZE = 5;
@@ -55,15 +58,14 @@ export const welcomeMessage = (
 
 // ── Statistics ───────────────────────────────────────────────────────
 export async function statsMessage(): Promise<string> {
+  // All boundaries computed in IRAN time (Asia/Tehran, UTC+03:30, no DST).
+  // "today" = midnight Iran time today.
+  // "this week" = last Saturday midnight Iran time (Iranian week starts Sat).
+  // "this month" = 1st day of the current Jalali (Shamsi) month, midnight Iran time.
   const now = new Date();
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
-  const weekStart = new Date(now);
-  // Iran week starts on Saturday. getDay(): 0=Sun..6=Sat
-  const daysSinceSat = (now.getDay() + 1) % 7;
-  weekStart.setDate(now.getDate() - daysSinceSat);
-  weekStart.setHours(0, 0, 0, 0);
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const todayStart = startOfTodayIran();
+  const weekStart = startOfWeekIran();
+  const monthStart = startOfMonthIran();
 
   const [
     totalOrders,

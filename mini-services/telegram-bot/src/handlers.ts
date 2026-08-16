@@ -17,6 +17,8 @@ import {
   escapeHtml,
   normalizeSearchQuery,
   toAsciiDigits,
+  startOfTodayIran,
+  faDateShort,
 } from "./format.js";
 import {
   mainMenuKb,
@@ -137,9 +139,8 @@ export async function answerCallbacks(ctx: Context, next: () => Promise<void>) {
 // The main menu shows count badges for the two most actionable items:
 // today's orders and orders awaiting payment verification.
 async function fetchMainMenuStats(): Promise<{ todayCount: number; verifyCount: number }> {
-  const now = new Date();
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
+  // "today" is defined as midnight Iran time (Asia/Tehran), NOT server-local UTC.
+  const todayStart = startOfTodayIran();
   const [todayCount, verifyCount] = await Promise.all([
     db.order.count({ where: { createdAt: { gte: todayStart } } }),
     db.order.count({ where: { orderStatus: "paid" } }),
@@ -218,10 +219,10 @@ export async function handleTodayOrders(ctx: Context) {
   clearState(ctx.from?.id || 0);
   const page = cbPage(ctx);
   const now = new Date();
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
+  // "today" = midnight Iran time (Asia/Tehran), not server-local UTC.
+  const todayStart = startOfTodayIran();
   const { text, totalPages, orders } = await orderListMessage(
-    `📦 <b>سفارش‌های امروز</b>\n📅 ${new Intl.DateTimeFormat("fa-IR", { weekday: "long", month: "long", day: "numeric" }).format(now)}`,
+    `📦 <b>سفارش‌های امروز</b>\n📅 ${faDateShort(now)}`,
     { createdAt: { gte: todayStart } },
     page
   );
