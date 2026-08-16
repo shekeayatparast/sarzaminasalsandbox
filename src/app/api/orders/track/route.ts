@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
+// NEVER cache this route — order status can change at any time via the Telegram
+// bot, and the customer must always see the latest state. Without these flags,
+// Next.js may serve a stale rendered response.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 // Convert Persian (۰-۹) and Arabic-Indic (٠-٩) digits to ASCII 0-9
 const toAsciiDigits = (s: string): string =>
   s
@@ -76,15 +83,31 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
     });
 
+    // Explicit no-cache headers — the customer may re-search the same order
+    // multiple times while waiting for the admin to update its status, so the
+    // browser must always revalidate with the server.
+    const noCacheHeaders = {
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
+    };
+
     if (!orders.length) {
-      return NextResponse.json({
-        success: true,
-        orders: [],
-        message: "سفارشی با این اطلاعات یافت نشد",
-      });
+      return NextResponse.json(
+        {
+          success: true,
+          orders: [],
+          message: "سفارشی با این اطلاعات یافت نشد",
+        },
+        { headers: noCacheHeaders }
+      );
     }
 
-    return NextResponse.json({ success: true, orders });
+    return NextResponse.json(
+      { success: true, orders },
+      { headers: noCacheHeaders }
+    );
   } catch (e) {
     console.error("GET /api/orders/track error:", e);
     return NextResponse.json(

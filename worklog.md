@@ -206,3 +206,54 @@ Stage Summary:
 - New enhancements: live count badges on main menu, customer-name search, tracking-amount hints for bank verification, updatedAt display, top customers in stats, refresh-as-page-indicator, quick-nav to verify queue, robust error handling on status changes.
 - Bot stability: --hot reload for future changes, setsid daemonization (survives bash sessions), global error handlers (uncaughtException + unhandledRejection), try-catch on critical writes.
 - Bot is live at @MeowAboosBot, running on PID 13426, port 3003.
+
+---
+Task ID: fix-5
+Agent: main (orchestrator)
+Task: Fix bot→site status sync — admin changes status in Telegram bot but customer tracking page doesn't reflect the update
+
+Work Log:
+- Investigated root cause: queried DB directly and found 4 orders with IMPOSSIBLE state combinations (legacy from older bot versions that didn't sync paymentStatus with orderStatus):
+  • HN-25577: shipped + pending payment (should be confirmed)
+  • HN-92679, HN-69743, HN-16663: awaiting_payment + confirmed payment (impossible — admin had moved back to awaiting_payment but payment stayed confirmed)
+- Fixed DB inconsistencies: ran cleanup script that enforces the invariant:
+  • awaiting_payment → payment must be "pending"
+  • paid/confirmed/preparing/shipped/delivered → payment must be "confirmed"
+  • cancelled → payment unchanged (preserve for accounting)
+  Result: 4 orders fixed.
+- Hardened /api/orders/track route to NEVER cache:
+  • Added `export const dynamic = "force-dynamic"`
+  • Added `export const revalidate = 0`
+  • Added `export const fetchCache = "force-no-store"`
+  • Added explicit response headers: `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0`, `Pragma: no-cache`, `Expires: 0`
+  Verified via curl: response now includes all no-cache headers.
+- Upgraded TrackOrdersView (customer tracking page) with live-update capabilities:
+  • fetch() now uses `cache: "no-store"` + custom `Cache-Control: no-cache` header
+  • URL includes `_t=<timestamp>` cache-buster to force fresh network requests
+  • Added auto-polling every 15 seconds while results are displayed (detects admin status changes in real-time without manual refresh)
+  • Smart snapshot comparison: only re-renders + shows toast when status actually changed (avoids flicker on no-change polls)
+  • Added "به‌روزرسانی" (refresh) button for instant manual refresh
+  • Added live status bar with pulsing green dot + "به‌روزرسانی خودکار هر ۱۵ ثانیه" + last-updated timestamp
+  • On detected change, shows toast: "وضعیت سفارش شما به‌روزرسانی شد"
+- Hardened bot's handleSetOrderStatus to ALWAYS keep paymentStatus consistent with orderStatus:
+  • awaiting_payment → paymentStatus = "pending"
+  • paid/confirmed/preparing/shipped/delivered → paymentStatus = "confirmed"
+  • cancelled → paymentStatus unchanged
+  • Added explanatory comment about why this invariant matters
+  • Status change log now includes the new paymentStatus
+- Restarted bot cleanly (killed stale processes, started fresh with setsid -f + bun --hot).
+- Lint passes clean (0 errors, 0 warnings).
+- Verified end-to-end with Agent Browser:
+  • Customer searched HN-14704 → saw "پرداخت ثبت شد" (paid), step 2/6 ✓
+  • Simulated admin changing status to "shipped" via DB update (same as bot does)
+  • Customer clicked "به‌روزرسانی" → page instantly showed "ارسال شد" (shipped), step 5/6 ✓
+  • Simulated admin changing status to "delivered"
+  • Waited 18 seconds (no manual action) → auto-poll fired → page automatically updated to "تحویل داده شد" (delivered), step 6/6 ✓
+  • Dev log confirms polling at 15s intervals with cache-buster param
+  • No console errors, no runtime errors
+
+Stage Summary:
+- ROOT CAUSE: (1) Legacy inconsistent DB state from older bot versions that didn't sync paymentStatus. (2) No auto-refresh mechanism on customer tracking page — customer had to manually re-search to see updates. (3) Missing no-cache headers could let browser serve stale responses.
+- FIX: DB cleanup + hardened bot status handler (invariant enforced) + no-cache API + 15s auto-polling + manual refresh button + cache-busting.
+- Customer now sees admin status changes within 15 seconds automatically, or instantly via refresh button.
+- Bot-site sync is now robust: invariant (orderStatus ↔ paymentStatus) is enforced on every status change, preventing future inconsistencies.

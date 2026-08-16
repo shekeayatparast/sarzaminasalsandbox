@@ -344,21 +344,44 @@ export async function handleSetOrderStatus(ctx: Context) {
       return;
     }
 
+    // Determine the correct paymentStatus for the new order status.
+    // Rule:
+    //   - awaiting_payment  → payment must be "pending"  (customer hasn't paid)
+    //   - paid              → payment must be "confirmed" (customer clicked "I paid")
+    //   - confirmed/preparing/shipped/delivered → payment must be "confirmed"
+    //   - cancelled         → leave unchanged (preserve for accounting/audit)
+    //
+    // This guarantees the site's tracking page never shows an impossible
+    // combination like "shipped + pending payment" or "awaiting + confirmed".
+    let newPaymentStatus: string | undefined;
+    if (status === "awaiting_payment") {
+      newPaymentStatus = "pending";
+    } else if (status === "cancelled") {
+      newPaymentStatus = undefined; // preserve existing
+    } else {
+      // paid, confirmed, preparing, shipped, delivered
+      newPaymentStatus = "confirmed";
+    }
+
     await db.order.update({
       where: { id: order.id },
       data: {
         orderStatus: status,
-        // If admin moves to confirmed or later, also mark payment as confirmed
-        paymentStatus:
-          status === "confirmed" || status === "preparing" || status === "shipped" || status === "delivered"
-            ? "confirmed"
-            : status === "awaiting_payment"
-            ? "pending"
-            : undefined,
+        ...(newPaymentStatus !== undefined
+          ? { paymentStatus: newPaymentStatus }
+          : {}),
       },
     });
 
-    console.log(`📊 Status change: ${orderNumber} ${order.orderStatus} → ${status}`);
+    // Also update the related order items? No — items are immutable once
+    // the order is placed. Only the order's status fields change.
+
+    console.log(
+      `📊 Status change: ${orderNumber} ${order.orderStatus} → ${status}` +
+        (newPaymentStatus !== undefined
+          ? ` (payment: ${newPaymentStatus})`
+          : "")
+    );
 
     const text = await orderDetailsMessage(orderNumber);
     const msg =

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNav } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +33,7 @@ import {
   Copy,
   Check,
   ArrowLeft,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -268,36 +269,106 @@ export function TrackOrdersView() {
   const [phone, setPhone] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [searched, setSearched] = useState(false);
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const search = async () => {
-    if (!phone.trim() && !orderNumber.trim()) {
-      toast.error("شماره تماس یا شماره سفارش را وارد کنید");
+  // Build the search params from current inputs (with cache-buster).
+  const buildParams = useCallback(() => {
+    const params = new URLSearchParams();
+    if (orderNumber.trim()) params.set("orderNumber", orderNumber.trim());
+    if (phone.trim()) params.set("phone", phone.trim());
+    // Cache-buster: forces the browser to always hit the network
+    params.set("_t", String(Date.now()));
+    return params;
+  }, [orderNumber, phone]);
+
+  // Core fetch — `silent` controls loading spinner + toast (used for polling).
+  const doSearch = useCallback(
+    async (silent: boolean) => {
+      if (!phone.trim() && !orderNumber.trim()) {
+        if (!silent) toast.error("شماره تماس یا شماره سفارش را وارد کنید");
+        return;
+      }
+      if (silent) setRefreshing(true);
+      else setLoading(true);
+      setSearched(true);
+      try {
+        const params = buildParams();
+        // cache: 'no-store' guarantees a fresh network request every time
+        const res = await fetch(`/api/orders/track?${params}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        const newOrders: OrderWithItems[] = data.orders || [];
+
+        if (silent) {
+          // Compare snapshot — only update if something changed (avoid flicker)
+          const snap = (arr: OrderWithItems[]) =>
+            JSON.stringify(
+              arr.map((o) => ({
+                n: o.orderNumber,
+                s: o.orderStatus,
+                p: o.paymentStatus,
+                u: o.updatedAt,
+              }))
+            );
+          if (snap(orders) !== snap(newOrders)) {
+            setOrders(newOrders);
+            setLastUpdated(new Date());
+            toast.success("وضعیت سفارش شما به‌روزرسانی شد", {
+              description: "تغییرات جدید نمایش داده شد",
+            });
+          }
+        } else {
+          setOrders(newOrders);
+          setLastUpdated(new Date());
+          if (newOrders.length === 0) {
+            toast.info("سفارشی با این اطلاعات یافت نشد");
+          } else {
+            toast.success(`${toPersianDigits(newOrders.length)} سفارش یافت شد`);
+          }
+        }
+      } catch (e: any) {
+        if (!silent) {
+          toast.error(e.message || "خطا در پیگیری سفارش");
+          setOrders([]);
+        }
+      } finally {
+        if (silent) setRefreshing(false);
+        else setLoading(false);
+      }
+    },
+    [buildParams, phone, orderNumber, orders]
+  );
+
+  const search = () => doSearch(false);
+  const refresh = () => doSearch(true);
+
+  // Auto-poll every 15 seconds while results are displayed so the customer
+  // sees admin status changes in real time without manually re-searching.
+  useEffect(() => {
+    if (!searched || orders.length === 0) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
       return;
     }
-    setLoading(true);
-    setSearched(true);
-    try {
-      const params = new URLSearchParams();
-      if (orderNumber.trim()) params.set("orderNumber", orderNumber.trim());
-      if (phone.trim()) params.set("phone", phone.trim());
-      const res = await fetch(`/api/orders/track?${params}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setOrders(data.orders || []);
-      if ((data.orders || []).length === 0) {
-        toast.info("سفارشی با این اطلاعات یافت نشد");
-      } else {
-        toast.success(`${toPersianDigits(data.orders.length)} سفارش یافت شد`);
+    pollRef.current = setInterval(() => {
+      doSearch(true);
+    }, 15000);
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
       }
-    } catch (e: any) {
-      toast.error(e.message || "خطا در پیگیری سفارش");
-      setOrders([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+  }, [searched, orders.length, doSearch]);
 
   return (
     <div className="bg-cream-gradient min-h-[60vh]">
@@ -380,6 +451,40 @@ export function TrackOrdersView() {
         {/* Results */}
         {searched && !loading && (
           <div className="space-y-4">
+            {/* Live status bar — auto-refresh indicator + manual refresh button */}
+            {orders.length > 0 && (
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground bg-honey-light/15 border border-honey/20 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-600"></span>
+                  </span>
+                  <span className="shrink-0">به‌روزرسانی خودکار هر ۱۵ ثانیه</span>
+                  {lastUpdated && (
+                    <span className="text-muted-foreground/70 truncate">
+                      • آخرین به‌روزرسانی:{" "}
+                      {new Intl.DateTimeFormat("fa-IR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      }).format(lastUpdated)}
+                    </span>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={refresh}
+                  disabled={refreshing}
+                  className="h-7 px-2 text-xs text-honey-dark hover:bg-honey-light/30 shrink-0"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ml-1 ${refreshing ? "animate-spin" : ""}`}
+                  />
+                  به‌روزرسانی
+                </Button>
+              </div>
+            )}
             {orders.length === 0 ? (
               <Card className="p-8 text-center">
                 <Package className="w-12 h-12 text-muted-foreground/40 mx-auto mb-3" />
