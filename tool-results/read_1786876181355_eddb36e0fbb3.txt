@@ -1,0 +1,311 @@
+     1→---
+     2→Task ID: 2
+     3→Agent: image-generator
+     4→Task: Generate honey website images
+     5→
+     6→Work Log:
+     7→- Read existing project structure; worklog.md did not exist yet (created fresh).
+     8→- Invoked the image-generation skill to learn the z-ai CLI usage and supported image sizes.
+     9→- Created /home/z/my-project/public/images/ directory.
+    10→- Generated hero-honey.png (1344x768 landscape) — golden honey drizzled from wooden dipper over honeycomb.
+    11→- Attempted parallel generation of 5 remaining images; 2 succeeded (honey-konar.png, honey-multi.png), 3 hit rate-limit HTTP 429 (honey-gon.png, apiary.png, honeycomb-texture.png).
+    12→- Retried the 3 failed images sequentially (with 10-15s cooldown between calls) — all succeeded.
+    13→- Discovered CLI wrote JPEG-encoded bytes inside .png files (verified with `file` command). Used Python+PIL to re-encode every file as a real PNG so browsers / Next.js Image component handle MIME correctly.
+    14→- Final verification with `file` confirms all 6 files are now true PNG image data with correct dimensions.
+    15→
+    16→Stage Summary:
+    17→- All 6 images generated and saved to /home/z/my-project/public/images/:
+    18→  1. hero-honey.png          — 1344x768 PNG, golden honey drizzle hero (1.1 MB)
+    19→  2. honey-gon.png           — 1024x1024 PNG, light-amber Astragalus honey jar (828 KB)
+    20→  3. honey-konar.png         — 1024x1024 PNG, darker amber Sidr honey jar (887 KB)
+    21→  4. honey-multi.png         — 1024x1024 PNG, medium-amber wildflower honey jar (641 KB)
+    22→  5. apiary.png              — 1344x768 PNG, beekeeper tending beehives at golden hour (1.6 MB)
+    23→  6. honeycomb-texture.png   — 1344x768 PNG, top-down honeycomb filled with honey, section background (1.5 MB)
+    24→- Note: image-generation skill lists 1440x720 and 720x1440 as "supported", but the API rejects them (720 is not a multiple of 32). Used 1344x768 for landscape and 1024x1024 for square images instead.
+    25→- Warm golden/honey color theme and "no text" constraint honored in all prompts.
+    26→
+    27→---
+    28→Task ID: 1,3,4,5,6
+    29→Agent: main (orchestrator)
+    30→Task: Build complete سرزمین عسل (Land of Honey) e-commerce website
+    31→
+    32→Work Log:
+    33→- Set up Prisma schema (Product, Order, OrderItem) and pushed to SQLite; seeded 3 honey products (گون 1.4M/kg, کنار 1.2M/kg, چندگیاه 1.2M/kg).
+    34→- Built honey-themed design system in globals.css (warm amber/cream oklch palette, Vazirmatn Persian font, RTL, custom scrollbar, honey gradients, animations).
+    35→- Configured layout.tsx with lang="fa" dir="rtl" and Vazirmatn font.
+    36→- Created lib helpers: products.ts (containers, bonus rules, payment card), format.ts (Persian digits, toman/rial, unique amount + order number generators), locations.ts (31 Iran provinces + cities), store.ts (Zustand nav + cart stores with persist).
+    37→- Built APIs: GET /api/products, POST /api/orders (server-side total recompute + unique amount 1..999 + order number + delivery type detection), POST /api/orders/confirm (mark payment confirmed).
+    38→- Built shared components: Header (sticky, cart badge, mobile sheet menu), Footer (sticky-bottom, quick links, contact, payment card), ProductCard, AddToCartDialog (container grid, wax switch enabled ONLY for 1kg, qty stepper, bonus hint, price preview).
+    39→- Built 6 views: HomeView (hero, features, featured products, benefits teaser, about teaser, CTA), ProductsView (grid + container info), AboutView (story, stats, values, why-us), BenefitsView (general benefits, per-honey-type benefits, consumption tips, FAQ accordion), CartView (3-step flow: cart review → payment with unique amount in toman+rial → success, customer form, province/city selects, free-delivery detection for Shahrekord, post-fee note otherwise), ContactView (info cards + working form).
+    40→- Integrated all views into page.tsx with client-side view switching (single / route), sticky header + footer.
+    41→- Verified with Agent Browser: home renders, add-to-cart dialog (wax only for 1kg ✓), order submission creates DB record with unique amount (e.g. total 2,800,000 + unique 736 = 2,800,736), payment confirmation marks status confirmed, free delivery for Shahrekord + post for other cities, bonus honey at 5kg threshold, FAQ accordion, mobile responsive + hamburger menu, contact form. No console errors.
+    42→
+    43→Stage Summary:
+    44→- Complete production-ready Persian RTL honey e-commerce site on single / route.
+    45→- All business rules implemented: 3 honey types with correct prices, 6 container sizes (0.5-4kg + 25kg wholesale), wax only on 1kg, 0.5kg bonus per 5kg non-wholesale, free delivery in Shahrekord, post fee separate for other cities, unique tracking amount (1-999 toman) added to each order, card-to-card payment with confirm button, order persistence + status tracking.
+    46→- 2 test orders verified in DB with correct totals, unique amounts, and delivery types.
+    47→- Ready for future Telegram bot integration for admin order management.
+    48→
+    49→---
+    50→Task ID: 2-regen
+    51→Agent: image-generator
+    52→Task: Regenerate prettier honey product images without any text/labels
+    53→
+    54→Work Log:
+    55→- Read worklog.md to understand prior context: original 6 images already generated; customer complained product images needed to be prettier AND must contain ABSOLUTELY NO text/labels/writing.
+    56→- Invoked image-generation skill to re-confirm CLI usage (`z-ai image -p "..." -o "..." -s 1024x1024`) and supported sizes (1024x1024 confirmed valid for square product images).
+    57→- Verified target files existed in /home/z/my-project/public/images/.
+    58→- Generated honey-gon.png (Astragalus / light-amber honey, golden honeycomb accent, cream background with subtle honeycomb shadow) — 1024x1024.
+    59→- Waited 12s cooldown (avoid HTTP 429) then generated honey-konar.png (Sidr / rich dark-amber honey, fresh green sidr leaves, cream background) — 1024x1024.
+    60→- Waited 12s cooldown then generated honey-multi.png (medium-amber wildflower honey, mixed purple/yellow/white wildflowers) — 1024x1024.
+    61→- As with prior agent, the z-ai CLI wrote JPEG bytes inside .png files (verified via `file` → "JPEG image data, JFIF standard 1.01"). Re-encoded all 3 as true PNGs with Python+PIL (Image.open → convert('RGB') → save PNG optimize=True).
+    62→- Verified all 3 files now report "PNG image data, 1024 x 1024, 8-bit/color RGB, non-interlaced" via `file`.
+    63→- Ran VLM (z-ai vision) text-detection spot-check across all 3 images in a single batched call. Result: IMAGE 1 (honey-gon) = no text; IMAGE 2 (honey-konar) = no text; IMAGE 3 (honey-multi) = TEXT_FOUND=yes (word "Wildflower" written in script at top of image).
+    64→- Re-generated honey-multi.png with a hardened prompt explicitly demanding a plain blank jar with no label/engraving/watermark/signature/caption and 100% text-free image. Re-encoded as PNG.
+    65→- Re-ran VLM text-detection on the regenerated honey-multi.png — confirmed TEXT_FOUND=no, no text/letters/numbers/labels anywhere.
+    66→- Final `file` verification: all 3 files are valid 1024x1024 RGB PNGs.
+    67→
+    68→Stage Summary:
+    69→- All 3 product images regenerated (overwriting existing files) at /home/z/my-project/public/images/:
+    70→  1. honey-gon.png     — 1024x1024 PNG, ~512 KB, premium glass jar of golden light-amber Astragalus honey + honeycomb accent, cream background, text-free (VLM verified).
+    71→  2. honey-konar.png   — 1024x1024 PNG, ~596 KB, premium glass jar of rich dark-amber Sidr honey + fresh green sidr leaves, cream background, text-free (VLM verified).
+    72→  3. honey-multi.png   — 1024x1024 PNG, ~644 KB, premium glass jar of medium-amber wildflower honey + mixed wildflowers, cream background, text-free (VLM verified after one re-generation pass — first attempt had a "Wildflower" script caption that was caught and eliminated).
+    73→- All prompts explicitly forbid text/labels/writing/letters/watermarks; VLM (glm-5v-turbo) was used to programmatically verify the absence of any text in each final image.
+    74→- Customer requirement met: prettier ultra-premium luxury product photography AND absolutely no text on any image.
+    75→
+    76→---
+    77→Task ID: fix-1
+    78→Agent: main (orchestrator)
+    79→Task: Apply customer feedback fixes across the site
+    80→
+    81→Work Log:
+    82→- Added orderStatus field to Order model (awaiting_payment|paid|confirmed|preparing|shipped|delivered|cancelled), pushed schema, regenerated Prisma client, restarted dev server.
+    83→- Created GET /api/orders/track endpoint (search by phone OR orderNumber, returns orders with items).
+    84→- Updated POST /api/orders/confirm to also set orderStatus="paid".
+    85→- Added order status labels + progress step helper in format.ts.
+    86→- Added "track" to ViewName in nav store + Header nav items + page.tsx view router.
+    87→- Regenerated 3 product images (prettier, VLM-verified text-free) via subagent.
+    88→- HomeView: changed feature card "ارسال رایگان" → "تحویل به سراسر کشور".
+    89→- ProductCard: removed honey color Badge from image.
+    90→- ProductsView: removed entire "ظروف موجود برای خرید" section + Shahrekord free-delivery text.
+    91→- AboutView: removed floating "+۲۰ سال تجربه" badge; replaced stat "+۲۰ سال تجربه" with "۳۱ استان تحت پوشش".
+    92→- ContactView: removed "ساعات کاری" card, removed email, removed "ارسال پیام" form; updated phone to ۰۹۱۴۰۲۰۲۳۲۰.
+    93→- Footer: removed email, updated phone to ۰۹۱۴۰۲۰۲۳۲۰, added "پیگیری سفارش" to quick links.
+    94→- AddToCartDialog: changed "درب با موم (مومی)" → "با موم عسل"; updated description to "عسل به همراه موم طبیعی عرضه می‌شود".
+    95→- CartView payment step: removed delivery-type Badge next to order number; added "کپی شماره سفارش" button; replaced "مبلغ کالاها" line with full itemized breakdown (product name, container, wax, qty, kg, unit price × qty, line total) with scroll.
+    96→- BenefitsView: removed color badges from HONEY_TYPES cards; removed "رنگ" from FAQ answer.
+    97→- Created TrackOrdersView: search by phone/orderNumber, displays order cards with StatusTracker (6-step progress bar + colored status badge), itemized items, copy order number button.
+    98→- Fixed sonner toaster: removed useTheme dependency (no ThemeProvider configured) that was preventing it from mounting; themed success/error/warning/info toasts with honey palette.
+    99→- Made all assets local: created /public/images/favicon.svg, updated metadata icons to local path, removed external icon reference.
+   100→- Re-seeded products with empty color fields.
+   101→- Browser-verified all fixes: home features text, no color labels, products page (no containers section), wax wording, payment page (copy order btn + itemized breakdown + no delivery badge), contact page (no clock/email/form + new phone), about page (no 20 years), track page (status tracker with progress bar working for awaiting_payment & shipped statuses), mobile responsive + hamburger menu with all 6 nav items, themed toasts working.
+   102→
+   103→Stage Summary:
+   104→- All 12 customer-reported issues resolved + added new order tracking feature.
+   105→- Order status workflow ready for Telegram bot admin integration (admin will set orderStatus: confirmed/preparing/shipped/delivered/cancelled).
+   106→- Waiting for customer to send logo file for integration.
+   107→
+   108→---
+   109→Task ID: fix-2
+   110→Agent: main (orchestrator)
+   111→Task: Apply second round of customer feedback + build Telegram admin bot
+   112→
+   113→Work Log:
+   114→- Fixed Switch component RTL bug: the thumb was overflowing the container when checked because translate-x was positive (LTR direction) in an RTL layout. Redesigned switch to h-6 w-11 with px-0.5 padding, size-5 thumb, and data-[state=checked]:-translate-x-5 (negative = left in RTL). Thumb now stays cleanly inside the track.
+   115→- Copied customer's logo (upload/ChatGPT_Image...removebg-preview.png, 296x265 RGBA PNG) to public/images/logo.png.
+   116→- Header: replaced Droplet icon placeholder with the actual logo image (Next.js Image, object-contain) in both the desktop header and the mobile Sheet menu.
+   117→- Footer: removed the entire "پرداخت سفارش" (payment/card info) section; replaced Droplet icon with the logo image; changed grid from 4 columns to 3 columns (brand, quick links, contact).
+   118→- HomeView: removed the floating "+۲۰ سال تجربه" badge from the about-teaser section's apiary image.
+   119→- Built comprehensive Telegram admin bot as a mini-service (mini-services/telegram-bot/):
+   120→  - grammy framework, long-polling, admin-only access (ID 5207653104)
+   121→  - HTTP server on port 3003 for receiving notifications from Next.js
+   122→  - Features: /start main menu, 📊 statistics dashboard (totals, revenue, today/week/month, top products, top customers), 📦 new orders list, 📋 all orders with status filter, order details with itemized items + customer info + delivery + payment, 🔄 status change workflow (7 statuses), 👥 customers list + details with order history, 🍯 products list + details + price editing (interactive flow), 🔍 search by order number or phone (plain text = search)
+   123→  - Persian formatting (Jalali dates, Persian digits, toman/rial), HTML-formatted messages, inline keyboards with pagination
+   124→  - New-order notification: rich message with all order details + action buttons (view, confirm, change status)
+   125→  - Payment-confirmed notification: alert with order summary + verification prompt
+   126→- Wired Next.js → bot notifications: created src/lib/notify-bot.ts (fire-and-forget fetch to localhost:3003). POST /api/orders now calls notifyBotNewOrder after creating an order. POST /api/orders/confirm now calls notifyBotPaymentConfirmed after marking payment confirmed.
+   127→- Verified: bot connects as @MeowAboosBot, both notification endpoints tested successfully (admin received real Telegram messages for HN-14704 test), bot survives across separate bash commands using ( setsid ... & ) daemon pattern.
+   128→- Lint passes clean.
+   129→
+   130→Stage Summary:
+   131→- All 4 customer-reported UI issues fixed (switch overflow, footer payment removal, logo integration, +20 badge removal).
+   132→- Full-featured Telegram admin bot running on port 3003 with real-time order notifications + complete store management (orders, customers, products, stats, search).
+   133→- Bot token: 8902705780 (test), Admin ID: 5207653104.
+   134→- End-to-end flow: customer places order on website → Next.js API creates order → fires HTTP notification to bot → bot sends rich Telegram alert to admin with action buttons. Same for payment confirmation.
+   135→
+   136→---
+   137→Task ID: fix-3
+   138→Agent: main (orchestrator)
+   139→Task: Remove product origin text + fix Persian keyboard tracking + comprehensive Telegram bot overhaul
+   140→
+   141→Work Log:
+   142→- Site: Removed "منشأ: {origin}" display from ProductCard.tsx (deleted the entire origin section + MapPin icon import).
+   143→- Site: Fixed order tracking for Persian keyboard users:
+   144→  - Updated /api/orders/track route to convert Persian (۰-۹) AND Arabic-Indic (٠-٩) digits to ASCII.
+   145→  - Order numbers now accept input without "HN-" prefix (auto-prepends): "12345" → "HN-12345".
+   146→  - Also handles "hn-" lowercase, "HN12345" (no dash), and pure phone numbers entered in the order field.
+   147→  - Updated TrackOrdersView placeholder to "مثلاً: 12345 یا HN-12345".
+   148→- Bot: Complete rewrite of all 6 bot source files with admin-workflow-first design:
+   149→  - format.ts: Added toAsciiDigits() for Persian/Arabic digit normalization, normalizeSearchQuery() that smart-detects order number vs phone (short digits → HN-XXXX, long digits → phone), nextStatus() for forward-only workflow, faDateShort(), improved status constants.
+   150→  - keyboards.ts: Reorganized main menu by admin frequency-of-use (today → verify payments → all → stats → customers → products → search). Added context-aware orderActionsKb (primary action = next logical status), cancelConfirmKb, customerActionsKb with tel: link, productActionsKb with featured toggle + desc edit, notifyNewOrderKb + notifyPaymentKb (payment one has "✅ تأیید پرداخت" button).
+   151→  - messages.ts: Richer messages with section separators (━━━), sales stats per product (qty + revenue), customer total spent (excluding cancelled), top products by revenue (confirmed+), better notification messages with clear action prompts.
+   152→  - handlers.ts: Added cbData/cbPayload/cbPage helpers (critical fix: ctx.match is RegExpMatchArray not string in grammy regex callbacks). New handlers: handleTodayOrders, handleVerifyOrders (paid orders needing verification), handleCancelOrder (confirmation dialog), handleCustomerOrders, handleProductToggleFeatured, handleProductEditDesc. Multi-step state machine for price + description editing. Smart search with Persian digit support.
+   153→  - index.ts: Registered all new callback patterns (today, verify, ocancel, corders, pdesc, pf). Added global uncaughtException/unhandledRejection handlers to prevent silent crashes.
+   154→- Bot bug fix: The original bot crashed silently because (1) ctx.match was treated as string when it's a RegExpMatchArray, and (2) no global error handlers. Both fixed.
+   155→- Bot daemon fix: The sandbox kills background processes when the parent bash command exits. Fixed by using `setsid -f` which fully detaches the process to init (PID 1), making it survive across commands.
+   156→- Verified: Bot running on PID 12888, port 3003 listening, health endpoint responds, both notification endpoints (new-order + payment-confirmed) tested successfully — admin received real Telegram messages.
+   157→- Verified with Agent Browser: "منشأ" text completely gone from products page (innerText check returns null). Order tracking with Persian digits "۵۳۵۷۷" (no HN-) finds order HN-53577 and displays full details. Order tracking with Persian phone "۰۹۹۱۷۸۴۵۱۲۶" also works.
+   158→- Lint passes clean. Dev server log shows no errors.
+   159→
+   160→Stage Summary:
+   161→- Site: Product origin text fully removed. Persian keyboard tracking fixed (accepts Persian/Arabic digits, works with or without HN- prefix, auto-detects phone vs order number).
+   162→- Bot: Complete overhaul from admin's perspective. Main menu reorganized by daily workflow priority. New features: today's orders view, pending payment verification queue, smart search (Persian digits + no-prefix order numbers), forward-only status workflow with context-aware primary action, cancel confirmation dialog, customer order history, product featured toggle, product description editing, per-product sales stats, richer formatted messages with section separators.
+   163→- Bot stability: Fixed silent crash from ctx.match type mismatch. Added global error handlers. Process now properly daemonized with setsid -f (parented to init, survives across bash commands).
+   164→- Bot is live and waiting for admin interaction at @MeowAboosBot.
+   165→
+   166→---
+   167→Task ID: fix-4
+   168→Agent: main (orchestrator)
+   169→Task: Comprehensive Telegram bot overhaul — fix all broken sections, sync with site, enable manual status changes, deliver best possible state
+   170→
+   171→Work Log:
+   172→- Root cause identified: The running bot process (PID 12888) had STALE code in memory — it was started with `bun index.ts` (no --hot flag), so even though the source files were updated in the previous session, the running process never reloaded. The bot.log showed crashes from `ctx.match.split is not a function` (the old bug) on every callback query — meaning ALL inline button clicks were broken (today orders, verify, all orders, order details, status change, customers, products, search results).
+   173→- Killed the stale bot process (PID 12888) and freed port 3003.
+   174→- Rewrote keyboards.ts with 4 improvements:
+   175→  1. mainMenuKb now takes (todayCount, verifyCount) and shows live count badges on "سفارش‌های امروز" and "در انتظار تأیید پرداخت" buttons — admin sees actionable items at a glance without tapping.
+   176→  2. Fixed customerActionsKb — removed the broken "📞 تماس با مشتری" button that used an unregistered `ctel:` callback. The phone is already shown in <code> tags in the message (tap-to-copy). Replaced with "🔍 جستجوی سفارش" quick-nav.
+   177→  3. orderActionsKb now always includes a "💳 در انتظار تأیید پرداخت" quick-nav button — the admin's most common loop (confirm one payment → go to next) is now 1 tap instead of 2.
+   178→  4. addPagination: the page indicator (e.g. "۱ / ۳") is now a refresh button (callback = same list:page) — re-fetches the current list. No extra button needed, elegant UX.
+   179→- Rewrote messages.ts with 5 improvements:
+   180→  1. welcomeMessage now takes (firstName, todayCount, verifyCount) and shows a "📋 خلاصه: X سفارش امروز | Y در انتظار تأیید پرداخت" summary line.
+   181→  2. orderDetailsMessage now shows "آخرین به‌روزرسانی: X زمان پیش" (from updatedAt) so admin knows when the status last changed.
+   182→  3. orderDetailsMessage now shows "🔍 این مبلغ را در صورت‌حساب بانکی جستجو کنید" hint next to the tracking amount — helps the admin match bank transfers.
+   183→  4. paymentConfirmedMessage now prominently shows the tracking amount in the action prompt: "مبلغ یکتا = XXX تومان".
+   184→  5. searchOrders now has a customer-name fallback: if no match by order number or phone, searches by customerName contains. Admin can type "علی" and find all orders from customers named علی.
+   185→  6. statsMessage now includes a "🏆 برترین مشتریان" section (top 5 by total spent, confirmed-or-later orders only).
+   186→- Updated handlers.ts:
+   187→  1. Added fetchMainMenuStats() helper — fetches todayCount + verifyCount in parallel.
+   188→  2. handleStart and handleBack now fetch live counts and pass to welcomeMessage + mainMenuKb.
+   189→  3. handleHelp updated to mention name search.
+   190→  4. handleSearch prompt updated to show name search example.
+   191→  5. handleSetOrderStatus hardened with: status validation (rejects unknown statuses), no-op detection (if status hasn't changed, shows info instead of writing), try-catch around DB write (shows user-friendly error on failure), logs every status change with old→new, shows "وضعیت قبلی" + "وضعیت جدید" in the confirmation message.
+   192→- Updated start-bot.sh to use `bun --hot index.ts` for live code reloading (future code changes auto-reload without manual restart).
+   193→- Restarted bot with `setsid -f bun --hot index.ts > bot.log 2>&1 < /dev/null &` — daemonized (survives across bash commands), hot-reload enabled, logs to bot.log.
+   194→- Verified bot boots cleanly: connected as @MeowAboosBot, health endpoint responds, no errors in log.
+   195→- Tested notification endpoints: POST /notify/new-order (HN-92679) → admin received rich Telegram message. POST /notify/payment-confirmed (HN-53577) → admin received rich Telegram message with "✅ تأیید پرداخت" button.
+   196→- Verified Telegram getWebhookInfo: no webhook set (pure polling), 0 pending updates (bot consuming them), allowed_updates = ["message", "callback_query"]. Bot is properly polling.
+   197→- Admin actively tested the bot in real-time and completed the FULL order lifecycle: paid → confirmed → preparing → shipped → delivered (4 status changes, all logged, zero errors). This proves every callback handler works — the ctx.match crash is gone.
+   198→- Verified bot-site sync end-to-end: admin changed HN-53577 status to "delivered" via bot → site's tracking API instantly returns orderStatus="delivered", paymentStatus="confirmed" → Agent Browser visual confirmation: tracking page shows "تحویل داده شد" with all 6 progress steps completed.
+   199→- No errors in dev.log or bot.log during testing.
+   200→
+   201→Stage Summary:
+   202→- ROOT CAUSE of "many sections don't work": stale bot process with old code. Fixed by killing + restarting with --hot.
+   203→- ALL bot sections now work: main menu (with live counts), today's orders, pending payment verification queue, all orders, status-filtered lists, order details, manual status change (full workflow), cancel order (with confirmation), customer list, customer details, customer orders, product list, product details, product price edit, product description edit, product featured toggle, statistics (with top customers), search (by order number / phone / customer name).
+   204→- Manual status change (admin's explicit request): fully working. Admin tested paid→confirmed→preparing→shipped→delivered. Each transition shows old + new status, updates the shared DB, and the site tracking page reflects it instantly.
+   205→- Bot-site sync: perfect. Status changes in bot → site tracking reflects in real-time (verified via API + Agent Browser visual).
+   206→- New enhancements: live count badges on main menu, customer-name search, tracking-amount hints for bank verification, updatedAt display, top customers in stats, refresh-as-page-indicator, quick-nav to verify queue, robust error handling on status changes.
+   207→- Bot stability: --hot reload for future changes, setsid daemonization (survives bash sessions), global error handlers (uncaughtException + unhandledRejection), try-catch on critical writes.
+   208→- Bot is live at @MeowAboosBot, running on PID 13426, port 3003.
+   209→
+   210→---
+   211→Task ID: fix-5
+   212→Agent: main (orchestrator)
+   213→Task: Fix bot→site status sync — admin changes status in Telegram bot but customer tracking page doesn't reflect the update
+   214→
+   215→Work Log:
+   216→- Investigated root cause: queried DB directly and found 4 orders with IMPOSSIBLE state combinations (legacy from older bot versions that didn't sync paymentStatus with orderStatus):
+   217→  • HN-25577: shipped + pending payment (should be confirmed)
+   218→  • HN-92679, HN-69743, HN-16663: awaiting_payment + confirmed payment (impossible — admin had moved back to awaiting_payment but payment stayed confirmed)
+   219→- Fixed DB inconsistencies: ran cleanup script that enforces the invariant:
+   220→  • awaiting_payment → payment must be "pending"
+   221→  • paid/confirmed/preparing/shipped/delivered → payment must be "confirmed"
+   222→  • cancelled → payment unchanged (preserve for accounting)
+   223→  Result: 4 orders fixed.
+   224→- Hardened /api/orders/track route to NEVER cache:
+   225→  • Added `export const dynamic = "force-dynamic"`
+   226→  • Added `export const revalidate = 0`
+   227→  • Added `export const fetchCache = "force-no-store"`
+   228→  • Added explicit response headers: `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0`, `Pragma: no-cache`, `Expires: 0`
+   229→  Verified via curl: response now includes all no-cache headers.
+   230→- Upgraded TrackOrdersView (customer tracking page) with live-update capabilities:
+   231→  • fetch() now uses `cache: "no-store"` + custom `Cache-Control: no-cache` header
+   232→  • URL includes `_t=<timestamp>` cache-buster to force fresh network requests
+   233→  • Added auto-polling every 15 seconds while results are displayed (detects admin status changes in real-time without manual refresh)
+   234→  • Smart snapshot comparison: only re-renders + shows toast when status actually changed (avoids flicker on no-change polls)
+   235→  • Added "به‌روزرسانی" (refresh) button for instant manual refresh
+   236→  • Added live status bar with pulsing green dot + "به‌روزرسانی خودکار هر ۱۵ ثانیه" + last-updated timestamp
+   237→  • On detected change, shows toast: "وضعیت سفارش شما به‌روزرسانی شد"
+   238→- Hardened bot's handleSetOrderStatus to ALWAYS keep paymentStatus consistent with orderStatus:
+   239→  • awaiting_payment → paymentStatus = "pending"
+   240→  • paid/confirmed/preparing/shipped/delivered → paymentStatus = "confirmed"
+   241→  • cancelled → paymentStatus unchanged
+   242→  • Added explanatory comment about why this invariant matters
+   243→  • Status change log now includes the new paymentStatus
+   244→- Restarted bot cleanly (killed stale processes, started fresh with setsid -f + bun --hot).
+   245→- Lint passes clean (0 errors, 0 warnings).
+   246→- Verified end-to-end with Agent Browser:
+   247→  • Customer searched HN-14704 → saw "پرداخت ثبت شد" (paid), step 2/6 ✓
+   248→  • Simulated admin changing status to "shipped" via DB update (same as bot does)
+   249→  • Customer clicked "به‌روزرسانی" → page instantly showed "ارسال شد" (shipped), step 5/6 ✓
+   250→  • Simulated admin changing status to "delivered"
+   251→  • Waited 18 seconds (no manual action) → auto-poll fired → page automatically updated to "تحویل داده شد" (delivered), step 6/6 ✓
+   252→  • Dev log confirms polling at 15s intervals with cache-buster param
+   253→  • No console errors, no runtime errors
+   254→
+   255→Stage Summary:
+   256→- ROOT CAUSE: (1) Legacy inconsistent DB state from older bot versions that didn't sync paymentStatus. (2) No auto-refresh mechanism on customer tracking page — customer had to manually re-search to see updates. (3) Missing no-cache headers could let browser serve stale responses.
+   257→- FIX: DB cleanup + hardened bot status handler (invariant enforced) + no-cache API + 15s auto-polling + manual refresh button + cache-busting.
+   258→- Customer now sees admin status changes within 15 seconds automatically, or instantly via refresh button.
+   259→- Bot-site sync is now robust: invariant (orderStatus ↔ paymentStatus) is enforced on every status change, preventing future inconsistencies.
+   260→
+   261→---
+   262→Task ID: fix-6
+   263→Agent: main (orchestrator)
+   264→Task: Deep audit of bot-site synchronization + add auto-redirect to cart after Add to Cart
+   265→
+   266→Work Log:
+   267→- Deep audit of ALL bot files (handlers, messages, keyboards, format, index) + ALL site files (store, AddToCartDialog, CartView, ProductsView, HomeView, page.tsx, products.ts, format.ts, notify-bot.ts, API routes).
+   268→- Identified 6 sync issues between bot and site:
+   269→  1. Products API had no no-cache headers → admin's price/desc/featured edits via bot could be served stale to site visitors.
+   270→  2. Bot's product edit confirmation messages didn't mention site sync.
+   271→  3. /api/orders POST trusted client-sent unitPrice — security issue + stale-price issue (if admin raised price via bot, old cached price could be submitted).
+   272→  4. ProductsView and HomeView fetched products with default cache (could be stale).
+   273→  5. No auto-redirect to cart after Add to Cart (user's explicit request).
+   274→  6. Bot's price edit handler lacked validation bounds and old-vs-new diff display.
+   275→
+   276→- FIX 1 (Products API no-cache): Added `dynamic = "force-dynamic"`, `revalidate = 0`, `fetchCache = "force-no-store"` + explicit `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0`, `Pragma: no-cache`, `Expires: 0` headers to GET /api/products. Now admin's product edits via bot are ALWAYS reflected on the site.
+   277→
+   278→- FIX 2 (Bot edit confirmations): 
+   279→  • Product price edit now shows: old price, new price, diff (🔺 increase / 🔻 decrease), and "🌐 این تغییر بلافاصله در سایت اعمال می‌شود." notice. Logs every price change.
+   280→  • Product description edit now shows "🌐 این تغییر بلافاصله در سایت اعمال می‌شود." notice. Logs every desc change.
+   281→  • Product featured toggle now shows the same site-sync notice + logs every toggle.
+   282→  • Added price validation: rejects NaN, ≤0, and > 1,000,000,000 (sanity bound).
+   283→
+   284→- FIX 3 (SECURITY — server-side price validation): POST /api/orders now fetches ALL referenced products from DB, recomputes the correct unitPrice = round(pricePerKg × containerSize) for each item, and overrides any client-sent unitPrice that doesn't match. Also syncs the productName from DB. This prevents: (a) stale-price orders if admin changed price via bot but customer had old cached page, (b) malicious price tampering.
+   285→
+   286→- FIX 4 (Client no-cache fetches): ProductsView + HomeView now fetch /api/products with `cache: "no-store"` so the browser always hits the network for fresh product data.
+   287→
+   288→- FIX 5 (Auto-redirect to cart): AddToCartDialog's handleAdd() now:
+   289→  1. Adds item to cart store
+   290→  2. Resets dialog state (qty, wax)
+   291→  3. Closes the dialog
+   292→  4. Shows success toast with "در حال انتقال به سبد خرید..." description
+   293→  5. After 250ms (for toast + dialog-close animation), navigates to "cart" view
+   294→  • Button label changed from "افزودن به سبد خرید" → "افزودن به سبد و ادامه" (with ShoppingBasket icon) to set the expectation that they're going to the cart.
+   295→  • Imported useNav from store + ShoppingBasket icon.
+   296→
+   297→- Restarted bot cleanly with `setsid -f bun --hot index.ts` (hot-reload picks up the handler changes).
+   298→
+   299→- Verified end-to-end with Agent Browser:
+   300→  • Add-to-cart flow: Clicked "افزودن" on عسل گون → dialog opened → clicked "افزودن به سبد و ادامه" → ✅ page auto-navigated to cart, item shown ("اقلام سبد (۱)" + "عسل گون"), toast "عسل گون به سبد خرید اضافه شد - در حال انتقال به سبد خرید..." shown.
+   301→  • Product price sync: Simulated admin changing gon price 1,400,000 → 1,550,000 via DB (same as bot does) → reloaded products page → site showed "۱,۵۵۰,۰۰۰ تومان" ✅. Restored to 1,400,000 → reloaded → site showed "۱,۴۰۰,۰۰۰ تومان" ✅.
+   302→  • Full order lifecycle: Created real order HN-84196 via site API → bot received "📨 New order notification" ✅. Customer confirmed payment via /api/orders/confirm → bot received "💳 Payment confirmed notification" ✅. Admin (real, via bot) changed status paid→confirmed → bot logged "📊 Status change: HN-84196 paid → confirmed (payment: confirmed)" → site tracking page auto-polled and showed "تأیید مدیریت" ✅.
+   303→  • No console errors, no runtime errors, lint clean.
+   304→
+   305→Stage Summary:
+   306→- ALL identified sync issues FIXED. Bot and site now share a single source of truth (the SQLite DB) with proper no-cache semantics on both ends.
+   307→- SECURITY FIX: Server now validates every order item's unitPrice against the live DB — customers can never pay a stale or tampered price.
+   308→- USER REQUEST FULFILLED: Customers are now auto-redirected to the cart immediately after clicking "افزودن به سبد و ادامه" — they go straight to finalizing payment and completing their order.
+   309→- Bot enhancements: Price edit shows old/new/diff + site-sync notice. Desc edit + featured toggle show site-sync notice. All edits logged. Price validation bounds added.
+   310→- Verified live: bot@MeowAboosBot running on port 3003, admin ID 5207653104, full bidirectional sync working.
+   311→

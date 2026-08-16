@@ -92,9 +92,9 @@ bot.callbackQuery(/^pf:(.+)$/, handleProductToggleFeatured);
 // Text messages (search + price/desc edit)
 bot.on("message:text", handleTextMessage);
 
-// Error handler
+// Error handler — catches errors thrown inside handlers
 bot.catch((err) => {
-  console.error("❌ Bot error:", err.error);
+  console.error("❌ Bot handler error:", err.error);
 });
 
 // ── Notification sender ──────────────────────────────────────────────
@@ -137,9 +137,15 @@ const httpServer = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
 
-    // Health check
+    // Health check — includes polling status
     if (req.method === "GET" && url.pathname === "/health") {
-      return Response.json({ ok: true, service: "telegram-bot", port: PORT });
+      return Response.json({
+        ok: true,
+        service: "telegram-bot",
+        port: PORT,
+        polling: pollingAlive,
+        uptimeSec: Math.floor(process.uptime()),
+      });
     }
 
     // New order notification
@@ -185,9 +191,75 @@ const httpServer = Bun.serve({
 console.log(`🌐 Notification HTTP server running on port ${PORT}`);
 console.log(`   POST /notify/new-order        — new order alert`);
 console.log(`   POST /notify/payment-confirmed — payment confirmed alert`);
-console.log(`   GET  /health                   — health check`);
+console.log(`   GET  /health                   — health check (includes polling status)`);
 
-// ── Start bot polling ────────────────────────────────────────────────
+// ── Polling with auto-restart watchdog ───────────────────────────────
+// The 409 Conflict error happens when another bot instance is polling (e.g.
+// during bun --hot restart, the old process's getUpdates may still be in-flight
+// on Telegram's side). Without a retry loop, the polling dies and the bot goes
+// deaf to all button clicks. This watchdog restarts polling automatically.
+let pollingAlive = false;
+let pollingStartTime = 0;
+let crashCount = 0;
+
+async function startPollingWithWatchdog() {
+  // First, ensure no webhook is set (clean state for polling)
+  try {
+    await bot.api.deleteWebhook({ drop_pending_updates: false });
+  } catch (e) {
+    console.warn("⚠️ deleteWebhook failed (continuing):", e);
+  }
+
+  // Retry loop — runs forever until the process exits
+  while (true) {
+    try {
+      pollingAlive = true;
+      pollingStartTime = Date.now();
+      console.log(`🔄 Starting polling (attempt ${crashCount + 1})...`);
+      await bot.start({
+        drop_pending_updates: false, // Don't drop pending clicks — process them
+        allowed_updates: ["message", "callback_query"],
+      });
+      // bot.start() resolves normally only when bot.stop() is called
+      pollingAlive = false;
+      console.log("ℹ️ Polling stopped normally.");
+      break;
+    } catch (e: any) {
+      pollingAlive = false;
+      crashCount++;
+      const errMsg = String(e?.message || e);
+      const is409 = e?.error_code === 409 || errMsg.includes("409") || errMsg.includes("Conflict");
+      const isNetwork =
+        errMsg.includes("fetch") ||
+        errMsg.includes("network") ||
+        errMsg.includes("ETIMEDOUT") ||
+        errMsg.includes("ECONNRESET");
+
+      console.error(
+        `❌ Polling crashed (crash #${crashCount}, is409=${is409}, isNetwork=${isNetwork}):`,
+        errMsg.slice(0, 200)
+      );
+
+      if (is409) {
+        console.log("⏳ 409 conflict — another instance may still be shutting down. Waiting 3s before retry...");
+        await sleep(3000);
+      } else if (isNetwork) {
+        console.log("⏳ Network error — waiting 5s before retry...");
+        await sleep(5000);
+      } else {
+        console.log("⏳ Unexpected error — waiting 2s before retry...");
+        await sleep(2000);
+      }
+      // Loop continues → restart polling
+    }
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Start the bot (init + polling watchdog)
 async function startBot() {
   try {
     await bot.init();
@@ -196,11 +268,12 @@ async function startBot() {
     );
     console.log(`👤 Admin ID: ${ADMIN_ID}`);
 
-    bot.start({
-      drop_pending_updates: true,
-      allowed_updates: ["message", "callback_query"],
+    // Start polling in the background (with auto-restart watchdog)
+    startPollingWithWatchdog().catch((e) => {
+      console.error("💥 Polling watchdog crashed unexpectedly:", e);
     });
-    console.log("✅ Bot is now listening for updates...");
+
+    console.log("✅ Bot is now listening for updates (with auto-restart watchdog)...");
   } catch (e) {
     console.error("❌ Failed to start bot:", e);
     process.exit(1);
@@ -209,10 +282,17 @@ async function startBot() {
 startBot();
 
 // ── Graceful shutdown ────────────────────────────────────────────────
+let shuttingDown = false;
 const shutdown = async (signal: string) => {
+  if (shuttingDown) return; // Prevent double-shutdown
+  shuttingDown = true;
   console.log(`\n${signal} received, shutting down...`);
-  httpServer.stop();
-  await bot.stop();
+  try {
+    httpServer.stop();
+    await bot.stop();
+  } catch (e) {
+    console.error("Error during shutdown:", e);
+  }
   process.exit(0);
 };
 process.on("SIGTERM", () => shutdown("SIGTERM"));

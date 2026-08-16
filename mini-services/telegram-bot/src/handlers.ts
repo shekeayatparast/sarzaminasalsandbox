@@ -6,7 +6,7 @@
 //   4. Manage products (price, featured, description)
 import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { db } from "./db.js";
+import { db, withRetry } from "./db.js";
 import { ADMIN_ID } from "./config.js";
 import {
   toPersianDigits,
@@ -328,10 +328,18 @@ export async function handleSetOrderStatus(ctx: Context) {
   }
 
   try {
-    const order = await db.order.findUnique({
-      where: { orderNumber },
-      select: { id: true, customerName: true, orderStatus: true },
-    });
+    // Show a "processing" indicator so the admin knows the click was received
+    try {
+      await ctx.editMessageText("⏳ در حال به‌روزرسانی وضعیت...", { parse_mode: "HTML" });
+    } catch {}
+
+    const order = await withRetry(
+      () => db.order.findUnique({
+        where: { orderNumber },
+        select: { id: true, customerName: true, orderStatus: true },
+      }),
+      { label: `findOrder(${orderNumber})` }
+    );
     if (!order) {
       await show(ctx, "❌ سفارش یافت نشد.", backKb());
       return;
@@ -363,18 +371,18 @@ export async function handleSetOrderStatus(ctx: Context) {
       newPaymentStatus = "confirmed";
     }
 
-    await db.order.update({
-      where: { id: order.id },
-      data: {
-        orderStatus: status,
-        ...(newPaymentStatus !== undefined
-          ? { paymentStatus: newPaymentStatus }
-          : {}),
-      },
-    });
-
-    // Also update the related order items? No — items are immutable once
-    // the order is placed. Only the order's status fields change.
+    await withRetry(
+      () => db.order.update({
+        where: { id: order.id },
+        data: {
+          orderStatus: status,
+          ...(newPaymentStatus !== undefined
+            ? { paymentStatus: newPaymentStatus }
+            : {}),
+        },
+      }),
+      { label: `updateOrderStatus(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+    );
 
     console.log(
       `📊 Status change: ${orderNumber} ${order.orderStatus} → ${status}` +
@@ -392,9 +400,25 @@ export async function handleSetOrderStatus(ctx: Context) {
       `📊 وضعیت جدید: ${statusLabel(status)}\n\n` +
       (text || "");
     await show(ctx, msg, orderActionsKb(orderNumber, status));
-  } catch (e) {
-    console.error("handleSetOrderStatus error:", e);
-    await show(ctx, "❌ خطا در به‌روزرسانی وضعیت سفارش. دوباره تلاش کنید.", backKb());
+  } catch (e: any) {
+    // Log the FULL error details so we can diagnose the root cause
+    const errCode = e?.code || e?.errno || "N/A";
+    const errMsg = String(e?.message || e).slice(0, 300);
+    const errStack = e?.stack ? String(e.stack).split("\n").slice(0, 3).join(" | ") : "";
+    console.error(
+      `❌ handleSetOrderStatus FAILED for ${orderNumber} → ${status} | ` +
+      `code=${errCode} | msg=${errMsg}` +
+      (errStack ? ` | stack=${errStack}` : "")
+    );
+    await show(
+      ctx,
+      `❌ <b>خطا در به‌روزرسانی وضعیت سفارش</b>\n\n` +
+        `📋 سفارش: <code>${orderNumber}</code>\n` +
+        `📊 وضعیت هدف: ${statusLabel(status)}\n` +
+        `⚠️ خطا: <code>${errCode}</code>\n\n` +
+        `لطفاً دوباره تلاش کنید. اگر خطا تکرار شد، چند ثانیه صبر کنید و دوباره امتحان کنید.`,
+      backKb()
+    );
   }
 }
 
