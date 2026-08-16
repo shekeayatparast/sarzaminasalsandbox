@@ -38,7 +38,9 @@ mkdir -p "$LOG_DIR" 2>/dev/null || true
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 
 log() {
-  echo "[$(timestamp)] $*" | tee -a "$LOG_FILE" 2>/dev/null || echo "[$(timestamp)] $*"
+  local msg="[$(timestamp)] $*"
+  echo "$msg"
+  [[ -d "$LOG_DIR" ]] && echo "$msg" >> "$LOG_FILE" 2>/dev/null || true
 }
 
 send_telegram() {
@@ -66,7 +68,7 @@ should_alert() {
 }
 
 mark_alerted() {
-  date +%s > "$ALERT_COOLDOWN_FILE" 2>/dev/null || true
+  [[ -d "$LOG_DIR" ]] && date +%s > "$ALERT_COOLDOWN_FILE" 2>/dev/null || true
 }
 
 # ── Health checks ────────────────────────────────────────────────────
