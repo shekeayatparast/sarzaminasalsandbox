@@ -34,6 +34,8 @@ import {
   Check,
   ArrowLeft,
   RefreshCw,
+  Mail,
+  ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -65,7 +67,7 @@ const STATUS_STYLE: Record<
     bg: "bg-honey-light/40",
   },
   shipped: {
-    icon: Truck,
+    icon: Mail,
     color: "text-blue-600 dark:text-blue-400",
     bg: "bg-blue-100 dark:bg-blue-950/40",
   },
@@ -174,12 +176,30 @@ function StatusTracker({ status }: { status: string }) {
 
 function OrderCard({ order }: { order: OrderWithItems }) {
   const [copied, setCopied] = useState(false);
+  const [copiedTracking, setCopiedTracking] = useState(false);
   const copyNumber = () => {
     navigator.clipboard.writeText(order.orderNumber);
     setCopied(true);
     toast.success("شماره سفارش کپی شد");
     setTimeout(() => setCopied(false), 2000);
   };
+  const copyTracking = () => {
+    if (!order.trackingCode) return;
+    navigator.clipboard.writeText(order.trackingCode);
+    setCopiedTracking(true);
+    toast.success("کد رهگیری کپی شد");
+    setTimeout(() => setCopiedTracking(false), 2000);
+  };
+
+  // Show the tracking code section when the order is shipped or delivered AND
+  // a tracking code is present.
+  const showTracking =
+    order.trackingCode &&
+    ["shipped", "delivered"].includes(order.orderStatus);
+  // Iran Post tracking URL — opens in new tab so the customer stays on our site
+  const postTrackingUrl = order.trackingCode
+    ? `https://tracking.post.ir`
+    : null;
 
   return (
     <Card className="p-5 border-border/60 shadow-sm">
@@ -220,6 +240,55 @@ function OrderCard({ order }: { order: OrderWithItems }) {
 
       {/* Status tracker */}
       <StatusTracker status={order.orderStatus} />
+
+      {/* Post tracking section — shown when shipped/delivered with a tracking code */}
+      {showTracking && (
+        <div className="mt-4 rounded-xl border-2 border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            <h3 className="font-bold text-blue-700 dark:text-blue-300">
+              کد رهگیری پستی
+            </h3>
+          </div>
+          <div className="flex items-center gap-2 mb-3">
+            <code
+              dir="ltr"
+              className="flex-1 bg-white dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 text-base font-bold text-blue-700 dark:text-blue-300 select-all text-center tracking-wider"
+            >
+              {toPersianDigits(order.trackingCode!)}
+            </code>
+            <Button
+              size="icon"
+              variant="outline"
+              className="shrink-0 border-blue-300 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-950/50"
+              onClick={copyTracking}
+              title="کپی کد رهگیری"
+            >
+              {copiedTracking ? (
+                <Check className="w-4 h-4 text-green-600" />
+              ) : (
+                <Copy className="w-4 h-4" />
+              )}
+            </Button>
+          </div>
+          <p className="text-xs text-blue-700 dark:text-blue-300 mb-3 leading-relaxed">
+            📦 بسته شما به پست تحویل داده شده است. می‌توانید وضعیت لحظه‌ای
+            بسته را از طریق کد رهگیری فوق در سامانه رسمی شرکت پست جمهوری
+            اسلامی ایران پیگیری کنید.
+          </p>
+          {postTrackingUrl && (
+            <a
+              href={postTrackingUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg py-2.5 px-4 transition-colors text-sm"
+            >
+              <ExternalLink className="w-4 h-4" />
+              پیگیری در سامانه پست
+            </a>
+          )}
+        </div>
+      )}
 
       {/* Items */}
       <div className="mt-4 space-y-2">

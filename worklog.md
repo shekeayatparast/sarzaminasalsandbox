@@ -404,3 +404,80 @@ Stage Summary:
 - FIXES: (1) Custom adaptive polling loop with 409 short-poll fallback — bot works even with a competing instance. (2) Price parsing now rejects negative/non-digit input. (3) State clears on every button click — no more misinterpreted text messages. (4) Comprehensive test suite (66 tests) ensures all handlers work correctly.
 - KNOWN ISSUE: Another bot instance is polling the same token from a different server. This bot uses short-poll mode (timeout=0) as a fallback, which works but is less efficient. The admin should stop the other instance for optimal performance. When the other instance stops, this bot will automatically switch back to long-poll mode within 60 seconds.
 - ALL 66 HANDLER TESTS PASS. Bot is live, healthy, and all handlers verified working.
+
+---
+Task ID: fix-9
+Agent: main (orchestrator)
+Task: Two changes — (1) Remove "برداشت مستقیم از زنبورستان‌ها" from About Us benefits, (2) Modify order status workflow so "ارسال شد" → "تحویل به پست" with post tracking code integration (customers track via سامانه پست)
+
+Work Log:
+- SMALL CHANGE (About Us benefits): Removed "برداشت مستقیم از زنبورستان‌های خودمان" from the WHY_US array in /home/z/my-project/src/components/site/AboutView.tsx. The benefits list now has 5 items instead of 6. Verified via Agent Browser that the list displays correctly without the apiaries mention.
+
+- SCHEMA CHANGE: Added `trackingCode String?` field to the Order model in /home/z/my-project/prisma/schema.prisma. This stores the post tracking code (کد رهگیری پستی) when the order is handed over to the post office. Ran `bun run db:push` to apply the schema and regenerate the Prisma client. Verified the DB has the new column (17 columns total in Order table, trackingCode at position 16).
+
+- BIG CHANGE — Post tracking integration:
+  • Bot format.ts: Renamed STATUS_LABELS.shipped from "ارسال شد" → "تحویل به پست". Changed STATUS_EMOJI.shipped from 🚚 → 📮 (post box emoji, more appropriate for post handover).
+  • Bot keyboards.ts: Updated nextActionLabel for "shipped" to "📮 تحویل به پست". Added new `trackingEntryKb(orderNumber)` keyboard with "⏭️ بدون کد رهگیری" (skip) + "❌ لغو" buttons.
+  • Bot handlers.ts: 
+    - Added new UserState type: `{ action: "enter_tracking"; orderNumber: string }`.
+    - Modified handleSetOrderStatus: when status === "shipped", instead of immediately updating the DB, it now sets the userState to "enter_tracking" and shows a prompt asking the admin to enter the post tracking code. The prompt includes a delivery-type-aware hint (different message for shahrekord vs post delivery). The prompt does NOT update the DB — the order stays in its current status until the admin enters the code or skips.
+    - Added new handler handleSkipTrackingCode (callback pattern `ossk:<orderNumber>`): updates the order to "shipped" with trackingCode = null. Used when admin taps "بدون کد رهگیری".
+    - Modified handleTextMessage: added a new branch for state.action === "enter_tracking". When admin sends a text message in this state, the bot:
+      1. Normalizes the input (Persian/Arabic digits → ASCII, strips whitespace)
+      2. Validates: must be 8-30 alphanumeric characters (regex: /^[A-Za-z0-9]{8,30}$/)
+      3. On valid: updates order with status=shipped, paymentStatus=confirmed, trackingCode=normalized code. Shows success message with the tracking code + note that customer can track via post.
+      4. On invalid: shows error explaining the requirements (8-30 chars, alphanumeric, no spaces). RE-SETS the state so the admin can retry.
+    - Updated the help text (/help command) to reflect the new 7-step workflow including tracking code entry.
+  • Bot messages.ts: Updated orderDetailsMessage to show a new "📮 کد رهگیری پستی" section when the order has a trackingCode AND status is shipped/delivered. The section shows the tracking code in a copyable <code> block + the URL https://tracking.post.ir + a note that the customer can track in real-time via the post system. Updated statsMessage label from "🚚 ارسال شده" → "🚚 ارسال شده به پست".
+  • Bot index.ts: Registered new callback handler `bot.callbackQuery(/^ossk:([^:]+)$/, handleSkipTrackingCode)` for the skip-tracking button.
+
+  • Site format.ts: Renamed ORDER_STATUS_LABELS.shipped from "ارسال شد" → "تحویل به پست".
+  • Site TrackOrdersView.tsx:
+    - Changed STATUS_STYLE.shipped icon from Truck → Mail (envelope, more appropriate for post).
+    - Added new imports: Mail, ExternalLink from lucide-react.
+    - Added `copiedTracking` state + `copyTracking()` function to the OrderCard component.
+    - Added `showTracking` flag: true when order.trackingCode exists AND status is shipped/delivered.
+    - Added `postTrackingUrl` = "https://tracking.post.ir" (opens in new tab).
+    - Added a new post tracking section (blue-themed card) that displays when showTracking is true. Contains:
+      • "کد رهگیری پستی" heading with Mail icon
+      • The tracking code in a large, bold, copyable <code> element (dir=ltr, Persian digits, select-all)
+      • A copy button (copies tracking code to clipboard, shows toast "کد رهگیری کپی شد")
+      • An explanatory note: "بسته شما به پست تحویل داده شده است. می‌توانید وضعیت لحظه‌ای بسته را از طریق کد رهگیری فوق در سامانه رسمی شرکت پست جمهوری اسلامی ایران پیگیری کنید."
+      • A prominent blue "پیگیری در سامانه پست" button (with ExternalLink icon) that opens https://tracking.post.ir in a new tab.
+
+- TESTING:
+  • Added 5 new tests to test-handlers.ts for the tracking code flow:
+    - 14g: oss:<order>:shipped prompts for tracking code (does NOT update DB) — verifies the prompt is shown AND the DB is untouched AND userState is set to enter_tracking.
+    - 14h: enter_tracking + valid tracking code updates order with trackingCode — verifies status=shipped, paymentStatus=confirmed, trackingCode saved, success message shown, state cleared.
+    - 14i: enter_tracking + invalid tracking code (too short) shows error, keeps state — verifies DB untouched, error message shown, state RE-SET for retry.
+    - 14j: ossk:<order> skip tracking code, set shipped with null trackingCode — verifies status=shipped, trackingCode=null, success message mentions "بدون کد رهگیری".
+    - 14k: Persian-digit tracking code normalized and saved as ASCII — verifies "۱۲۳۴۵۶۷۸۹۰۱۲۳۴" is saved as "12345678901234".
+  • Updated snapshotOrder/restoreOrder to save/restore the trackingCode field (test isolation).
+  • Updated test imports to include handleSkipTrackingCode, userState, clearState.
+  • ALL 88 TESTS PASS (was 83, +5 new tests).
+
+- END-TO-END VERIFICATION (Agent Browser):
+  • About page: Verified "برداشت مستقیم از زنبورستان‌های خودمان" is GONE from the benefits list. The list now shows: عسل صد در صد طبیعی و خالص / بسته‌بندی بهداشتی و استاندارد / ارسال رایگان در شهرکرد / هدیه ویژه با خرید عمده / پشتیبانی و مشاوره تخصصی.
+  • Track Orders page: Searched HN-14704 (delivered with test tracking code 12345678901234). Verified:
+    - Tracking code section with blue background is displayed ✅
+    - "کد رهگیری پستی" heading shown ✅
+    - Tracking code "۱۲۳۴۵۶۷۸۹۰۱۲۳۴" (Persian digits) displayed in a copyable code block ✅
+    - "پیگیری در سامانه پست" button links to https://tracking.post.ir/ ✅
+    - Status badge shows "تحویل داده شد" ✅
+    - Progress step labels show the NEW label "تحویل به پست" (was "ارسال شد") ✅
+    - All 6 step labels: در انتظار پرداخت / پرداخت ثبت شد / تأیید مدیریت / در حال آماده‌سازی / تحویل به پست / تحویل داده شد ✅
+  • VLM (vision model) screenshot verification confirmed the layout is clean and all elements are properly displayed.
+  • Bot order details message verified: HN-14704 (with tracking code) shows the "📮 کد رهگیری پستی" section with the code + tracking.post.ir URL. Orders without tracking code do NOT show the section.
+
+- Lint: 0 errors, 0 warnings on the site code.
+- Bot health: polling=true, uptime=370s, crashCount=0 (after restart with new code).
+- Dev server: status 200, no errors in dev.log.
+
+Stage Summary:
+- SMALL CHANGE DELIVERED: Removed "برداشت مستقیم از زنبورستان‌های خودمان" from the About Us benefits section.
+- BIG CHANGE DELIVERED: Modified the order status workflow so "ارسال شد" is now "تحویل به پست". When the admin advances an order to this status, the bot prompts for the post tracking code (کد رهگیری). The admin either enters the code (which is saved with the order) or taps "بدون کد رهگیری" to skip. The customer sees the tracking code prominently on the tracking page with a direct link to https://tracking.post.ir (سامانه رسمی شرکت پست) where they can track their package in real-time.
+- 88 bot handler tests pass (5 new tests for the tracking code flow).
+- Verified end-to-end via Agent Browser: site display, tracking code section, post link, status labels all working correctly.
+- NOTE: A test tracking code "12345678901234" was set on HN-14704 (delivered) for demonstration purposes. The user can remove it or set real tracking codes via the bot's "📮 تحویل به پست" button.
+- Bot is live at @MeowAboosBot, port 3003, polling=true (short-poll mode due to competing instance).
+- Site is live on port 3000, status 200.

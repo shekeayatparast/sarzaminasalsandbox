@@ -41,6 +41,7 @@ model Order {
   paymentStatus   String      @default("pending") // pending | confirmed
   orderStatus     String      @default("awaiting_payment") // awaiting_payment | paid | confirmed | preparing | shipped | delivered | cancelled
   deliveryType    String      // shahrekord (رایگان) | post (پستی)
+  trackingCode    String?     // کد رهگیری پستی — وقتی سفارش به پست تحویل داده می‌شود
   notes           String?     // یادداشت مشتری
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt

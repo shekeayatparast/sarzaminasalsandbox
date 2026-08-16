@@ -85,7 +85,7 @@ export const STATUS_LABELS: Record<string, string> = {
   paid: "پرداخت ثبت شد",
   confirmed: "تأیید مدیریت",
   preparing: "در حال آماده‌سازی",
-  shipped: "ارسال شد",
+  shipped: "تحویل به پست",
   delivered: "تحویل داده شد",
   cancelled: "لغو شد",
 };
@@ -95,7 +95,7 @@ export const STATUS_EMOJI: Record<string, string> = {
   paid: "💳",
   confirmed: "✅",
   preparing: "📦",
-  shipped: "🚚",
+  shipped: "📮",
   delivered: "🏁",
   cancelled: "❌",
 };

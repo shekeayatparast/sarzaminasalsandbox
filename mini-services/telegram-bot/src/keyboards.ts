@@ -114,7 +114,7 @@ function nextActionLabel(nextStatus: string): string {
     case "paid": return "💳 مشتری پرداخت کرد";
     case "confirmed": return "✅ تأیید پرداخت";
     case "preparing": return "📦 شروع آماده‌سازی";
-    case "shipped": return "🚚 ارسال شد";
+    case "shipped": return "📮 تحویل به پست";
     case "delivered": return "🏁 تحویل داده شد";
     default: return `➡️ ${STATUS_LABELS[nextStatus] || nextStatus}`;
   }
@@ -210,3 +210,11 @@ export const notifyPaymentKb = (orderNumber: string) =>
 export const editPriceCancelKb = (slug: string) =>
   new InlineKeyboard()
     .text("❌ لغو", `pd:${slug}`);
+
+// ── Tracking code entry keyboard ─────────────────────────────────────
+// Shown when the admin advances an order to "shipped" (تحویل به پست).
+// Provides a way to skip the tracking code if needed (e.g., hand delivery).
+export const trackingEntryKb = (orderNumber: string) =>
+  new InlineKeyboard()
+    .text("⏭️ بدون کد رهگیری", `ossk:${orderNumber}`).row()
+    .text("❌ لغو", `o:${orderNumber}`);

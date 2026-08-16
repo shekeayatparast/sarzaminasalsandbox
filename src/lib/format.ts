@@ -45,7 +45,7 @@ export const ORDER_STATUS_LABELS: Record<string, string> = {
   paid: "پرداخت ثبت شد",
   confirmed: "تأیید مدیریت",
   preparing: "در حال آماده‌سازی",
-  shipped: "ارسال شد",
+  shipped: "تحویل به پست",
   delivered: "تحویل داده شد",
   cancelled: "لغو شد",
 };

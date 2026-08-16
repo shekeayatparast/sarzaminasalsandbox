@@ -29,6 +29,7 @@ import {
   handleOrderDetails,
   handleOrderStatusMenu,
   handleSetOrderStatus,
+  handleSkipTrackingCode,
   handleCancelOrder,
   handleCustomers,
   handleCustomerDetails,
@@ -40,6 +41,7 @@ import {
   handleProductToggleFeatured,
   handleTextMessage,
 } from "./src/handlers.ts";
+import { userState, clearState } from "./src/handlers.ts";
 
 // ── Test infrastructure ──────────────────────────────────────────────
 
@@ -156,7 +158,7 @@ const snapshots: Map<string, any> = new Map();
 async function snapshotOrder(orderNumber: string) {
   const order = await db.order.findUnique({
     where: { orderNumber },
-    select: { orderStatus: true, paymentStatus: true },
+    select: { orderStatus: true, paymentStatus: true, trackingCode: true },
   });
   snapshots.set(orderNumber, order);
 }
@@ -166,7 +168,11 @@ async function restoreOrder(orderNumber: string) {
   if (snap) {
     await db.order.update({
       where: { orderNumber },
-      data: { orderStatus: snap.orderStatus, paymentStatus: snap.paymentStatus },
+      data: {
+        orderStatus: snap.orderStatus,
+        paymentStatus: snap.paymentStatus,
+        trackingCode: snap.trackingCode,
+      },
     });
   }
 }
@@ -396,6 +402,165 @@ async function main() {
     });
     assert(updated?.orderStatus === "awaiting_payment", `should be "awaiting_payment" (got "${updated?.orderStatus}")`);
     assert(updated?.paymentStatus === "pending", `payment should be "pending" (got "${updated?.paymentStatus}")`);
+  });
+
+  // ─── 14g-14j: Tracking code flow (NEW — تحویل به پست) ───
+  // When admin sets status to "shipped", the bot prompts for a tracking code
+  // instead of immediately updating. The admin then either sends the code as
+  // text, or taps "بدون کد رهگیری" to skip.
+
+  await test("14g. oss:<order>:shipped — prompts for tracking code (does NOT update DB)", async () => {
+    let testOrder = data.allOrders.find((o) => o.orderStatus === "preparing") || data.order;
+    await snapshotOrder(testOrder.orderNumber);
+    await db.order.update({
+      where: { orderNumber: testOrder.orderNumber },
+      data: { orderStatus: "preparing", paymentStatus: "confirmed" },
+    });
+
+    clearState(5207653104);
+    const ctx = makeCtx({ callbackData: `oss:${testOrder.orderNumber}:shipped` });
+    await handleSetOrderStatus(ctx as any);
+
+    // Verify the prompt is shown
+    const text = ctx._lastEdit || ctx._lastReply || "";
+    assertContains(text, "تحویل به پست", "should show 'تحویل به پست' in prompt");
+    assertContains(text, "کد رهگیری", "should ask for tracking code");
+    assertContains(text, testOrder.orderNumber, "should show order number");
+
+    // CRITICAL: The order status should NOT have changed yet
+    const updated = await db.order.findUnique({
+      where: { orderNumber: testOrder.orderNumber },
+      select: { orderStatus: true, trackingCode: true },
+    });
+    assert(updated?.orderStatus === "preparing", `orderStatus should still be "preparing" (got "${updated?.orderStatus}") — the prompt must NOT update the DB`);
+
+    // Verify the userState was set to enter_tracking
+    const state = userState.get(5207653104);
+    assert(!!state && state.action === "enter_tracking", `userState should be "enter_tracking" (got ${JSON.stringify(state)})`);
+    assert(state && "orderNumber" in state && state.orderNumber === testOrder.orderNumber, "state should have the correct orderNumber");
+  });
+
+  await test("14h. enter_tracking + valid tracking code — updates order with trackingCode", async () => {
+    // Set up: order in "preparing" status
+    let testOrder = data.allOrders.find((o) => o.orderStatus === "preparing") || data.order;
+    await snapshotOrder(testOrder.orderNumber);
+    await db.order.update({
+      where: { orderNumber: testOrder.orderNumber },
+      data: { orderStatus: "preparing", paymentStatus: "confirmed", trackingCode: null },
+    });
+
+    // First, set the state by calling handleSetOrderStatus with "shipped"
+    clearState(5207653104);
+    const ctxPrompt = makeCtx({ callbackData: `oss:${testOrder.orderNumber}:shipped` });
+    await handleSetOrderStatus(ctxPrompt as any);
+
+    // Now simulate the admin sending a tracking code
+    const trackingCode = "12345678901234";
+    const ctx = makeCtx({ text: trackingCode });
+    await handleTextMessage(ctx as any);
+
+    // Verify the order was updated
+    const updated = await db.order.findUnique({
+      where: { orderNumber: testOrder.orderNumber },
+      select: { orderStatus: true, paymentStatus: true, trackingCode: true },
+    });
+    assert(updated?.orderStatus === "shipped", `orderStatus should be "shipped" (got "${updated?.orderStatus}")`);
+    assert(updated?.paymentStatus === "confirmed", `paymentStatus should be "confirmed" (got "${updated?.paymentStatus}")`);
+    assert(updated?.trackingCode === trackingCode, `trackingCode should be "${trackingCode}" (got "${updated?.trackingCode}")`);
+
+    // Verify success message
+    const text = ctx._lastReply || ctx._lastEdit || "";
+    assertContains(text, "تحویل داده شد", "should show success message");
+    assertContains(text, trackingCode, "should show the tracking code in the success message");
+
+    // Verify state was cleared
+    const state = userState.get(5207653104);
+    assert(!state, "userState should be cleared after successful tracking code entry");
+  });
+
+  await test("14i. enter_tracking + invalid tracking code — shows error, keeps state", async () => {
+    let testOrder = data.allOrders.find((o) => o.orderStatus === "preparing") || data.order;
+    await snapshotOrder(testOrder.orderNumber);
+    await db.order.update({
+      where: { orderNumber: testOrder.orderNumber },
+      data: { orderStatus: "preparing", paymentStatus: "confirmed", trackingCode: null },
+    });
+
+    // Set up the enter_tracking state
+    clearState(5207653104);
+    const ctxPrompt = makeCtx({ callbackData: `oss:${testOrder.orderNumber}:shipped` });
+    await handleSetOrderStatus(ctxPrompt as any);
+
+    // Send an invalid tracking code (too short — only 5 chars)
+    const ctx = makeCtx({ text: "12345" });
+    await handleTextMessage(ctx as any);
+
+    // Verify the order was NOT updated
+    const updated = await db.order.findUnique({
+      where: { orderNumber: testOrder.orderNumber },
+      select: { orderStatus: true, trackingCode: true },
+    });
+    assert(updated?.orderStatus === "preparing", `orderStatus should still be "preparing" (got "${updated?.orderStatus}") — invalid code must NOT update DB`);
+    assert(updated?.trackingCode === null, `trackingCode should still be null (got "${updated?.trackingCode}")`);
+
+    // Verify error message
+    const text = ctx._lastReply || ctx._lastEdit || "";
+    assertContains(text, "نامعتبر", "should show 'invalid' message");
+
+    // Verify state was RE-SET (so admin can try again)
+    const state = userState.get(5207653104);
+    assert(!!state && state.action === "enter_tracking", "userState should be re-set so admin can retry");
+  });
+
+  await test("14j. ossk:<order> — skip tracking code, set shipped with null trackingCode", async () => {
+    let testOrder = data.allOrders.find((o) => o.orderStatus === "preparing") || data.order;
+    await snapshotOrder(testOrder.orderNumber);
+    await db.order.update({
+      where: { orderNumber: testOrder.orderNumber },
+      data: { orderStatus: "preparing", paymentStatus: "confirmed", trackingCode: null },
+    });
+
+    clearState(5207653104);
+    const ctx = makeCtx({ callbackData: `ossk:${testOrder.orderNumber}` });
+    await handleSkipTrackingCode(ctx as any);
+
+    // Verify the order was updated
+    const updated = await db.order.findUnique({
+      where: { orderNumber: testOrder.orderNumber },
+      select: { orderStatus: true, paymentStatus: true, trackingCode: true },
+    });
+    assert(updated?.orderStatus === "shipped", `orderStatus should be "shipped" (got "${updated?.orderStatus}")`);
+    assert(updated?.paymentStatus === "confirmed", `paymentStatus should be "confirmed" (got "${updated?.paymentStatus}")`);
+    assert(updated?.trackingCode === null, `trackingCode should be null (got "${updated?.trackingCode}")`);
+
+    // Verify success message
+    const text = ctx._lastEdit || ctx._lastReply || "";
+    assertContains(text, "تحویل داده شد", "should show success message");
+    assertContains(text, "بدون کد رهگیری", "should mention no tracking code");
+  });
+
+  await test("14k. Persian-digit tracking code — normalized and saved as ASCII", async () => {
+    let testOrder = data.allOrders.find((o) => o.orderStatus === "preparing") || data.order;
+    await snapshotOrder(testOrder.orderNumber);
+    await db.order.update({
+      where: { orderNumber: testOrder.orderNumber },
+      data: { orderStatus: "preparing", paymentStatus: "confirmed", trackingCode: null },
+    });
+
+    clearState(5207653104);
+    const ctxPrompt = makeCtx({ callbackData: `oss:${testOrder.orderNumber}:shipped` });
+    await handleSetOrderStatus(ctxPrompt as any);
+
+    // Send Persian digits
+    const persianCode = "۱۲۳۴۵۶۷۸۹۰۱۲۳۴"; // Persian form of 12345678901234
+    const ctx = makeCtx({ text: persianCode });
+    await handleTextMessage(ctx as any);
+
+    const updated = await db.order.findUnique({
+      where: { orderNumber: testOrder.orderNumber },
+      select: { trackingCode: true },
+    });
+    assert(updated?.trackingCode === "12345678901234", `Persian digits should be normalized to ASCII (got "${updated?.trackingCode}")`);
   });
 
   // ─── 15. Cancel order confirmation ───

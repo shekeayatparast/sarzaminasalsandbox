@@ -33,6 +33,7 @@ import {
   notifyNewOrderKb,
   notifyPaymentKb,
   editPriceCancelKb,
+  trackingEntryKb,
 } from "./keyboards.js";
 import {
   welcomeMessage,
@@ -53,7 +54,8 @@ const PAGE_SIZE = 5;
 // Each flow stores { action, payload }. Cleared on any navigation.
 type UserState =
   | { action: "edit_price"; slug: string }
-  | { action: "edit_desc"; slug: string };
+  | { action: "edit_desc"; slug: string }
+  | { action: "enter_tracking"; orderNumber: string };
 
 const userState = new Map<number, UserState>();
 
@@ -176,7 +178,9 @@ export async function handleHelp(ctx: Context) {
     `۲. مشتری پرداخت می‌کند و دکمه «تأیید پرداخت» را می‌زند → به شما اطلاع داده می‌شود\n` +
     `۳. شما وجه را در حساب بررسی می‌کنید و «✅ تأیید پرداخت» را می‌زنید\n` +
     `۴. سفارش را آماده کرده و وضعیت را به «📦 در حال آماده‌سازی» تغییر می‌دهید\n` +
-    `۵. پس از ارسال، وضعیت را به «🚚 ارسال شد» و سپس «🏁 تحویل داده شد» تغییر می‌دهید`;
+    `۵. پس از تحویل بسته به پست، وضعیت را به «📮 تحویل به پست» تغییر می‌دهید و کد رهگیری پستی را وارد می‌کنید\n` +
+    `۶. مشتری می‌تواند با کد رهگیری، وضعیت لحظه‌ای بسته را از سامانه پست پیگیری کند\n` +
+    `۷. پس از تحویل به مشتری، وضعیت را به «🏁 تحویل داده شد» تغییر می‌دهید`;
   const { todayCount, verifyCount } = await fetchMainMenuStats();
   await ctx.reply(msg, {
     parse_mode: "HTML",
@@ -321,6 +325,11 @@ export async function handleOrderStatusMenu(ctx: Context) {
 // → preparing → shipped → delivered (plus cancelled as a side state).
 // When the admin advances to "confirmed" or later, payment is also marked
 // as confirmed. When moved back to "awaiting_payment", payment resets to pending.
+//
+// SPECIAL CASE: When the admin advances to "shipped" (تحویل به پست), the
+// bot asks for the post tracking code BEFORE updating the status. The admin
+// either sends the code as a text message (which is then saved along with
+// the status) OR taps "بدون کد رهگیری" to skip and just set the status.
 export async function handleSetOrderStatus(ctx: Context) {
   // pattern: oss:<orderNumber>:<status>  (orderNumber has no colon, so parts[1]=orderNumber, parts[2]=status)
   const parts = cbData(ctx).split(":");
@@ -345,7 +354,13 @@ export async function handleSetOrderStatus(ctx: Context) {
     const order = await withRetry(
       () => db.order.findUnique({
         where: { orderNumber },
-        select: { id: true, customerName: true, orderStatus: true },
+        select: {
+          id: true,
+          customerName: true,
+          orderStatus: true,
+          deliveryType: true,
+          trackingCode: true,
+        },
       }),
       { label: `findOrder(${orderNumber})` }
     );
@@ -358,6 +373,30 @@ export async function handleSetOrderStatus(ctx: Context) {
     if (order.orderStatus === status) {
       const text = await orderDetailsMessage(orderNumber);
       await show(ctx, `ℹ️ وضعیت سفارش از قبل «${statusLabel(status)}» بود.\n\n${text || ""}`, orderActionsKb(orderNumber, status));
+      return;
+    }
+
+    // SPECIAL CASE: status === "shipped" → prompt for the post tracking code
+    // before updating. The admin enters the code (or skips) and the order is
+    // updated in the tracking-code handler.
+    if (status === "shipped") {
+      // Re-set the state AFTER the answerCallbacks middleware cleared it.
+      userState.set(ctx.from!.id, { action: "enter_tracking", orderNumber });
+      const deliveryHint =
+        order.deliveryType === "shahrekord"
+          ? "\n\n💡 این سفارش از نوع «تحویل در شهرکرد» است. اگر بسته را حضوری تحویل می‌دهید، می‌توانید بدون کد رهگیری ادامه دهید."
+          : "\n\n📦 این سفارش پستی است — لطفاً کد رهگیری را از رسید پست وارد کنید تا مشتری بتواند بسته را در سامانه پست پیگیری کند.";
+      await show(
+        ctx,
+        `📮 <b>تحویل به پست — وارد کردن کد رهگیری</b>\n\n` +
+          `🔖 سفارش: <code>${orderNumber}</code>\n` +
+          `👤 ${escapeHtml(order.customerName)}\n\n` +
+          `لطفاً <b>کد رهگیری پستی</b> را ارسال کنید.\n` +
+          `کد رهگیری روی رسید پست نوشته شده است (معمولاً ۱۳ تا ۲۰ رقم).\n\n` +
+          `📝 ارقام فارسی هم قابل قبول است.` +
+          deliveryHint,
+        trackingEntryKb(orderNumber)
+      );
       return;
     }
 
@@ -426,6 +465,71 @@ export async function handleSetOrderStatus(ctx: Context) {
         `📊 وضعیت هدف: ${statusLabel(status)}\n` +
         `⚠️ خطا: <code>${errCode}</code>\n\n` +
         `لطفاً دوباره تلاش کنید. اگر خطا تکرار شد، چند ثانیه صبر کنید و دوباره امتحان کنید.`,
+      backKb()
+    );
+  }
+}
+
+// ── Skip tracking code ───────────────────────────────────────────────
+// Called when the admin taps "بدون کد رهگیری" in the tracking-entry prompt.
+// Updates the order to "shipped" with trackingCode = null.
+export async function handleSkipTrackingCode(ctx: Context) {
+  // pattern: ossk:<orderNumber>
+  const orderNumber = cbData(ctx).split(":")[1];
+  try {
+    try {
+      await ctx.editMessageText("⏳ در حال به‌روزرسانی وضعیت...", { parse_mode: "HTML" });
+    } catch {}
+
+    const order = await withRetry(
+      () => db.order.findUnique({
+        where: { orderNumber },
+        select: { id: true, customerName: true, orderStatus: true },
+      }),
+      { label: `findOrderSkip(${orderNumber})` }
+    );
+    if (!order) {
+      await show(ctx, "❌ سفارش یافت نشد.", backKb());
+      return;
+    }
+
+    await withRetry(
+      () => db.order.update({
+        where: { id: order.id },
+        data: {
+          orderStatus: "shipped",
+          paymentStatus: "confirmed",
+          trackingCode: null,
+        },
+      }),
+      { label: `updateOrderStatusSkip(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+    );
+
+    console.log(`📊 Status change: ${orderNumber} ${order.orderStatus} → shipped (no tracking code)`);
+
+    const text = await orderDetailsMessage(orderNumber);
+    const msg =
+      `✅ <b>سفارش به پست تحویل داده شد</b>\n\n` +
+      `📋 <code>${orderNumber}</code>\n` +
+      `👤 ${escapeHtml(order.customerName)}\n` +
+      `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
+      `📊 وضعیت جدید: ${statusLabel("shipped")}\n` +
+      `⚠️ بدون کد رهگیری — مشتری نمی‌تواند بسته را در سامانه پست پیگیری کند.\n\n` +
+      (text || "");
+    await show(ctx, msg, orderActionsKb(orderNumber, "shipped"));
+  } catch (e: any) {
+    const errCode = e?.code || e?.errno || "N/A";
+    const errMsg = String(e?.message || e).slice(0, 300);
+    console.error(
+      `❌ handleSkipTrackingCode FAILED for ${orderNumber} | ` +
+      `code=${errCode} | msg=${errMsg}`
+    );
+    await show(
+      ctx,
+      `❌ <b>خطا در به‌روزرسانی وضعیت سفارش</b>\n\n` +
+        `📋 سفارش: <code>${orderNumber}</code>\n` +
+        `⚠️ خطا: <code>${errCode}</code>\n\n` +
+        `لطفاً دوباره تلاش کنید.`,
       backKb()
     );
   }
@@ -705,6 +809,82 @@ export async function handleTextMessage(ctx: Context) {
       { parse_mode: "HTML", reply_markup: productActionsKb(state.slug, product?.featured || false) }
     );
     console.log(`📝 Product desc updated: ${state.slug}`);
+    return;
+  }
+
+  // Tracking code entry flow — when admin is setting an order to "shipped"
+  // (تحویل به پست), they must enter the post tracking code.
+  if (state && state.action === "enter_tracking") {
+    const orderNumber = state.orderNumber;
+    clearState(userId);
+    // Normalize: convert Persian/Arabic digits to ASCII, strip whitespace.
+    // Tracking codes are typically all digits (13-20 digits for Iran Post),
+    // but we also allow letters (some registered post uses letters).
+    const normalized = toAsciiDigits(text).replace(/\s+/g, "");
+    // Validation: length 8-30, only alphanumeric
+    if (!/^[A-Za-z0-9]{8,30}$/.test(normalized)) {
+      await ctx.reply(
+        "❌ کد رهگیری نامعتبر است.\n\n" +
+          "کد رهگیری باید:\n" +
+          "• بین ۸ تا ۳۰ نویسه باشد\n" +
+          "• فقط شامل ارقام و حروف انگلیسی باشد\n" +
+          "• بدون فاصله یا کاراکتر خاص باشد\n\n" +
+          "لطفاً کد رهگیری صحیح را ارسال کنید یا روی «بدون کد رهگیری» بزنید.",
+        { parse_mode: "HTML", reply_markup: trackingEntryKb(orderNumber) }
+      );
+      // Re-set state so the next message is treated as another attempt
+      userState.set(userId, { action: "enter_tracking", orderNumber });
+      return;
+    }
+    try {
+      const order = await withRetry(
+        () => db.order.findUnique({
+          where: { orderNumber },
+          select: { id: true, customerName: true, orderStatus: true },
+        }),
+        { label: `findOrderTracking(${orderNumber})` }
+      );
+      if (!order) {
+        await ctx.reply("❌ سفارش یافت نشد.", { reply_markup: backKb(), parse_mode: "HTML" });
+        return;
+      }
+      await withRetry(
+        () => db.order.update({
+          where: { id: order.id },
+          data: {
+            orderStatus: "shipped",
+            paymentStatus: "confirmed",
+            trackingCode: normalized,
+          },
+        }),
+        { label: `updateOrderTracking(${orderNumber})`, maxRetries: 5, baseDelayMs: 300 }
+      );
+      console.log(
+        `📊 Status change: ${orderNumber} ${order.orderStatus} → shipped (tracking: ${normalized})`
+      );
+      const detailText = await orderDetailsMessage(orderNumber);
+      await ctx.reply(
+        `✅ <b>سفارش به پست تحویل داده شد</b>\n\n` +
+          `📋 <code>${orderNumber}</code>\n` +
+          `👤 ${escapeHtml(order.customerName)}\n` +
+          `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
+          `📊 وضعیت جدید: ${statusLabel("shipped")}\n` +
+          `📮 کد رهگیری: <code>${escapeHtml(normalized)}</code>\n\n` +
+          `🌐 مشتری می‌تواند با این کد رهگیری، وضعیت لحظه‌ای بسته را در سامانه پست پیگیری کند.\n\n` +
+          (detailText || ""),
+        { parse_mode: "HTML", reply_markup: orderActionsKb(orderNumber, "shipped") }
+      );
+    } catch (e: any) {
+      const errCode = e?.code || e?.errno || "N/A";
+      const errMsg = String(e?.message || e).slice(0, 300);
+      console.error(
+        `❌ enter_tracking FAILED for ${orderNumber} | code=${errCode} | msg=${errMsg}`
+      );
+      await ctx.reply(
+        `❌ خطا در ثبت کد رهگیری.\n\n⚠️ خطا: <code>${errCode}</code>\n\nلطفاً دوباره تلاش کنید.`,
+        { parse_mode: "HTML", reply_markup: backKb() }
+      );
+    }
     return;
   }
 

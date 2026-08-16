@@ -170,7 +170,7 @@ export async function statsMessage(): Promise<string> {
     `• 💳 پرداخت ثبت شد: <b>${toPersianDigits(paidCount)}</b>\n` +
     `• ✅ تأیید مدیریت: <b>${toPersianDigits(confirmedCount)}</b>\n` +
     `• 📦 در حال آماده‌سازی: <b>${toPersianDigits(preparingCount)}</b>\n` +
-    `• 🚚 ارسال شده: <b>${toPersianDigits(shippedCount)}</b>\n` +
+    `• 🚚 ارسال شده به پست: <b>${toPersianDigits(shippedCount)}</b>\n` +
     `• 🏁 تحویل شده: <b>${toPersianDigits(deliveredCount)}</b>\n` +
     `• ❌ لغو شده: <b>${toPersianDigits(cancelledCount)}</b>\n\n`;
 
@@ -321,6 +321,20 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
     `• پرداخت: ${order.paymentStatus === "confirmed" ? "✅ تأیید شده" : "⏳ در انتظار"}\n` +
     `• سفارش: ${statusLabel(order.orderStatus)}\n` +
     `• آخرین به‌روزرسانی: ${faTimeAgo(order.updatedAt)}`;
+
+  // Show tracking code if the order has been handed over to post
+  if (
+    order.trackingCode &&
+    ["shipped", "delivered"].includes(order.orderStatus)
+  ) {
+    msg +=
+      `\n\n━━━━━━━━━━━━━━━━━\n` +
+      `📮 <b>کد رهگیری پستی</b>\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `<code>${escapeHtml(order.trackingCode)}</code>\n` +
+      `🔍 مشتری می‌تواند با این کد، وضعیت لحظه‌ای بسته را در سامانه پست پیگیری کند:\n` +
+      `🌐 https://tracking.post.ir`;
+  }
 
   if (order.notes) {
     msg +=
