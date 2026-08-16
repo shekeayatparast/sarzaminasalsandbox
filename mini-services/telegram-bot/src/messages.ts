@@ -1,4 +1,5 @@
-// Message builders — produce HTML-formatted strings for the Telegram bot
+// Message builders — produce HTML-formatted strings for the Telegram bot.
+// All messages are designed for an admin who needs dense, scannable info.
 import { db } from "./db.js";
 import {
   toPersianDigits,
@@ -6,11 +7,13 @@ import {
   formatToman,
   formatRial,
   faDate,
+  faDateShort,
   faTimeAgo,
   escapeHtml,
   statusLabel,
   deliveryLabel,
   STATUS_LABELS,
+  normalizeSearchQuery,
 } from "./format.js";
 
 const PAGE_SIZE = 5;
@@ -19,18 +22,16 @@ const PAGE_SIZE = 5;
 export const welcomeMessage = (firstName: string): string => {
   const name = firstName ? ` ${escapeHtml(firstName)}` : "";
   return (
-    `🍯 <b>سرزمین عسل — پنل مدیریت</b>\n\n` +
+    `🍯 <b>سرزمین عسل — پنل مدیریت فروش</b>\n\n` +
     `سلام${name} عزیز 👋\n` +
-    `به ربات مدیریت فروشگاه سرزمین عسل خوش آمدید.\n` +
-    `با استفاده از منوی زیر می‌توانید سفارش‌ها، مشتریان و محصولات را مدیریت کنید.\n\n` +
-    `📌 برای مشاهده سفارش‌های جدید روی «سفارش‌های جدید» بزنید.\n` +
-    `📌 برای جستجو، شماره سفارش (مثل HN-12345) یا شماره تماس مشتری را ارسال کنید.`
+    `به ربات مدیریت فروشگاه خوش آمدید.\n\n` +
+    `💡 <b>نکته:</b> برای جستجوی سریع، شماره سفارش (مثل <code>12345</code> یا <code>HN-12345</code>) یا شماره تماس مشتری را مستقیماً ارسال کنید.\n\n` +
+    `🔔 با ثبت هر سفارش یا تأیید پرداخت، به طور خودکار به شما اطلاع داده می‌شود.`
   );
 };
 
 // ── Statistics ───────────────────────────────────────────────────────
 export async function statsMessage(): Promise<string> {
-  // Compute period start dates synchronously
   const now = new Date();
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
@@ -43,7 +44,7 @@ export async function statsMessage(): Promise<string> {
 
   const [
     totalOrders,
-    newCount,
+    awaitingCount,
     paidCount,
     confirmedCount,
     preparingCount,
@@ -89,22 +90,18 @@ export async function statsMessage(): Promise<string> {
     }),
   ]);
 
-  // Top products by revenue
+  // Top products by revenue (confirmed-or-later orders)
   const topProducts = await db.orderItem.groupBy({
     by: ["productName"],
-    _sum: { total: true },
+    _sum: { total: true, quantity: true },
     _count: { quantity: true },
     orderBy: { _sum: { total: "desc" } },
-    take: 3,
-  });
-
-  // Top customers by spend
-  const topCustomers = await db.order.groupBy({
-    by: ["customerPhone"],
-    _sum: { finalAmount: true },
-    _count: true,
-    orderBy: { _sum: { finalAmount: "desc" } },
-    take: 3,
+    take: 5,
+    where: {
+      order: {
+        orderStatus: { in: ["confirmed", "preparing", "shipped", "delivered"] },
+      },
+    },
   });
 
   const revenue = revenueAgg._sum.finalAmount || 0;
@@ -113,43 +110,40 @@ export async function statsMessage(): Promise<string> {
   const monthRev = monthAgg._sum.finalAmount || 0;
 
   let msg =
-    `📊 <b>آمار و گزارش‌های سرزمین عسل</b>\n\n` +
-    `📦 <b>وضعیت کلی سفارش‌ها</b>\n` +
+    `📊 <b>آمار و گزارش‌های سرزمین عسل</b>\n` +
+    `📅 ${faDateShort(now)}\n\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `📦 <b>وضعیت سفارش‌ها</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
     `• کل سفارش‌ها: <b>${toPersianDigits(totalOrders)}</b>\n` +
-    `• ⏳ در انتظار پرداخت: <b>${toPersianDigits(newCount)}</b>\n` +
+    `• ⏳ در انتظار پرداخت: <b>${toPersianDigits(awaitingCount)}</b>\n` +
     `• 💳 پرداخت ثبت شد: <b>${toPersianDigits(paidCount)}</b>\n` +
     `• ✅ تأیید مدیریت: <b>${toPersianDigits(confirmedCount)}</b>\n` +
     `• 📦 در حال آماده‌سازی: <b>${toPersianDigits(preparingCount)}</b>\n` +
     `• 🚚 ارسال شده: <b>${toPersianDigits(shippedCount)}</b>\n` +
     `• 🏁 تحویل شده: <b>${toPersianDigits(deliveredCount)}</b>\n` +
-    `• ❌ لغو شده: <b>${toPersianDigits(cancelledCount)}</b>\n\n` +
-    `💰 <b>درآمد کل (تأییدشده):</b>\n` +
-    `<b>${formatToman(revenue)}</b>\n\n` +
+    `• ❌ لغو شده: <b>${toPersianDigits(cancelledCount)}</b>\n\n`;
+
+  msg +=
+    `━━━━━━━━━━━━━━━━━\n` +
+    `💰 <b>درآمد (تأییدشده)</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `• کل: <b>${formatToman(revenue)}</b>\n\n` +
     `📅 <b>دوره‌های زمانی</b>\n` +
     `• امروز: <b>${toPersianDigits(todayOrders)}</b> سفارش — ${formatToman(todayRev)}\n` +
     `• این هفته: <b>${toPersianDigits(weekOrders)}</b> سفارش — ${formatToman(weekRev)}\n` +
-    `• این ماه: <b>${toPersianDigits(monthOrders)}</b> سفارش — ${formatToman(monthRev)}\n\n`;
+    `• این ماه: <b>${toPersianDigits(monthOrders)}</b> سفارش — ${formatToman(monthRev)}\n`;
 
   if (topProducts.length > 0) {
-    msg += `🍯 <b>پرفروش‌ترین محصولات</b>\n`;
+    msg +=
+      `\n━━━━━━━━━━━━━━━━━\n` +
+      `🍯 <b>پرفروش‌ترین محصولات</b>\n` +
+      `━━━━━━━━━━━━━━━━━\n`;
     topProducts.forEach((p, i) => {
-      msg += `${toPersianDigits(i + 1)}. ${escapeHtml(p.productName)} — ${toPersianDigits(p._count.quantity)} عدد — ${formatToman(p._sum.total || 0)}\n`;
+      msg +=
+        `${toPersianDigits(i + 1)}. ${escapeHtml(p.productName)}\n` +
+        `   📦 ${toPersianDigits(p._sum.quantity || 0)} عدد — ${formatToman(p._sum.total || 0)}\n`;
     });
-    msg += "\n";
-  }
-
-  if (topCustomers.length > 0) {
-    msg += `👥 <b>برترین مشتریان</b>\n`;
-    // Fetch names for top customers
-    for (let i = 0; i < topCustomers.length; i++) {
-      const c = topCustomers[i];
-      const oneOrder = await db.order.findFirst({
-        where: { customerPhone: c.customerPhone },
-        select: { customerName: true },
-      });
-      msg += `${toPersianDigits(i + 1)}. ${escapeHtml(oneOrder?.customerName || "—")} — ${toPersianDigits(c._count)} سفارش — ${formatToman(c._sum.finalAmount || 0)}\n`;
-      msg += `   📱 ${toPersianDigits(c.customerPhone)}\n`;
-    }
   }
 
   return msg;
@@ -190,7 +184,7 @@ export async function orderListMessage(
   }
 
   let msg = `${title}\n`;
-  msg += `📋 مجموع: <b>${toPersianDigits(total)}</b> سفارش\n\n`;
+  msg += `📋 مجموع: <b>${toPersianDigits(total)}</b> سفارش — صفحه ${toPersianDigits(page + 1)} از ${toPersianDigits(totalPages)}\n\n`;
   orders.forEach((o, i) => {
     const idx = skip + i + 1;
     msg +=
@@ -213,16 +207,20 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
 
   let msg =
     `📋 <b>جزئیات سفارش</b>\n` +
-    `<b>شماره:</b> <code>${order.orderNumber}</code>\n` +
+    `🔖 شماره: <code>${order.orderNumber}</code>\n` +
     `📅 ${faDate(order.createdAt)}\n\n`;
 
   msg +=
+    `━━━━━━━━━━━━━━━━━\n` +
     `👤 <b>مشتری</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
     `• نام: ${escapeHtml(order.customerName)}\n` +
     `• 📱 تلفن: <code>${toPersianDigits(order.customerPhone)}</code>\n\n`;
 
   msg +=
+    `━━━━━━━━━━━━━━━━━\n` +
     `📍 <b>محل تحویل</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
     `• استان: ${escapeHtml(order.province)}\n` +
     `• شهر: ${escapeHtml(order.city)}\n`;
   if (order.address) {
@@ -230,7 +228,7 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
   }
   msg += `• نحوه تحویل: ${deliveryLabel(order.deliveryType)}\n\n`;
 
-  msg += `🛒 <b>اقلام سفارش</b>\n`;
+  msg += `━━━━━━━━━━━━━━━━━\n🛒 <b>اقلام سفارش</b>\n━━━━━━━━━━━━━━━━━\n`;
   order.items.forEach((it, i) => {
     const waxTag = it.hasWax ? " 🐝(با موم)" : "";
     const wholeTag = it.isWholesale ? " (عمده)" : "";
@@ -241,7 +239,9 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
   });
 
   msg +=
-    `\n💵 <b>صورت‌حساب</b>\n` +
+    `\n━━━━━━━━━━━━━━━━━\n` +
+    `💵 <b>صورت‌حساب</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
     `• مبلغ کالاها: ${formatToman(order.totalAmount)}\n` +
     `• مبلغ یکتای پیگیری: <b>${formatNumber(order.uniqueAmount)} تومان</b>\n` +
     `   (${formatRial(order.uniqueAmount)})\n` +
@@ -249,12 +249,16 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
     `   (${formatRial(order.finalAmount)})\n\n`;
 
   msg +=
+    `━━━━━━━━━━━━━━━━━\n` +
     `📊 <b>وضعیت</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
     `• پرداخت: ${order.paymentStatus === "confirmed" ? "✅ تأیید شده" : "⏳ در انتظار"}\n` +
     `• سفارش: ${statusLabel(order.orderStatus)}\n`;
 
   if (order.notes) {
-    msg += `\n📝 <b>یادداشت مشتری:</b>\n${escapeHtml(order.notes)}\n`;
+    msg +=
+      `\n━━━━━━━━━━━━━━━━━\n` +
+      `📝 <b>یادداشت مشتری:</b>\n${escapeHtml(order.notes)}\n`;
   }
 
   return msg;
@@ -264,7 +268,6 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
 export async function customerListMessage(
   page: number
 ): Promise<{ text: string; totalPages: number; customers: any[] }> {
-  // Group by phone to get unique customers
   const grouped = await db.order.groupBy({
     by: ["customerPhone"],
     _count: true,
@@ -286,7 +289,6 @@ export async function customerListMessage(
     };
   }
 
-  // Fetch names
   const customers: { phone: string; name: string; count: number }[] = [];
   for (const g of slice) {
     const one = await db.order.findFirst({
@@ -300,8 +302,9 @@ export async function customerListMessage(
     });
   }
 
-  let msg = `👥 <b>لیست مشتریان</b>\n`;
-  msg += `📋 مجموع: <b>${toPersianDigits(total)}</b> مشتری\n\n`;
+  let msg =
+    `👥 <b>لیست مشتریان</b>\n` +
+    `📋 مجموع: <b>${toPersianDigits(total)}</b> مشتری — صفحه ${toPersianDigits(page + 1)} از ${toPersianDigits(totalPages)}\n\n`;
   slice.forEach((g, i) => {
     const idx = skip + i + 1;
     const name = customers[i].name;
@@ -316,9 +319,7 @@ export async function customerListMessage(
 }
 
 // ── Customer details ─────────────────────────────────────────────────
-export async function customerDetailsMessage(
-  phone: string
-): Promise<string | null> {
+export async function customerDetailsMessage(phone: string): Promise<string | null> {
   const orders = await db.order.findMany({
     where: { customerPhone: phone },
     orderBy: { createdAt: "desc" },
@@ -330,21 +331,32 @@ export async function customerDetailsMessage(
       customerName: true,
       city: true,
       province: true,
+      address: true,
+      deliveryType: true,
     },
   });
   if (orders.length === 0) return null;
 
   const c = orders[0];
-  const totalSpent = orders.reduce((s, o) => s + o.finalAmount, 0);
+  // Only count non-cancelled orders toward total spent
+  const activeOrders = orders.filter((o) => o.orderStatus !== "cancelled");
+  const totalSpent = activeOrders.reduce((s, o) => s + o.finalAmount, 0);
 
   let msg =
     `👤 <b>جزئیات مشتری</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
     `• نام: ${escapeHtml(c.customerName)}\n` +
     `• 📱 تلفن: <code>${toPersianDigits(phone)}</code>\n` +
-    `• استان: ${escapeHtml(c.province)} | شهر: ${escapeHtml(c.city)}\n\n` +
-    `📦 تعداد سفارش: <b>${toPersianDigits(orders.length)}</b>\n` +
-    `💰 مجموع خرید: <b>${formatToman(totalSpent)}</b>\n\n` +
-    `📋 <b>سوابق سفارش</b>\n`;
+    `• استان: ${escapeHtml(c.province)} | شهر: ${escapeHtml(c.city)}\n`;
+  if (c.address) {
+    msg += `• آدرس: ${escapeHtml(c.address)}\n`;
+  }
+  msg +=
+    `\n📦 تعداد سفارش: <b>${toPersianDigits(orders.length)}</b>\n` +
+    `💰 مجموع خرید (غیرلغو): <b>${formatToman(totalSpent)}</b>\n\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `📋 <b>سوابق سفارش</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n`;
 
   orders.forEach((o, i) => {
     msg +=
@@ -379,13 +391,15 @@ export async function productListMessage(
     };
   }
 
-  let msg = `🍯 <b>لیست محصولات</b>\n\n`;
+  let msg =
+    `🍯 <b>لیست محصولات</b>\n` +
+    `📋 مجموع: <b>${toPersianDigits(total)}</b> محصول\n\n`;
   products.forEach((p, i) => {
     msg +=
       `${toPersianDigits(i + 1)}. ${escapeHtml(p.name)} ${p.featured ? "⭐" : ""}\n` +
       `   💰 قیمت هر کیلو: <b>${formatToman(p.pricePerKg)}</b>\n`;
   });
-  msg += `\nبرای ویرایش قیمت، روی محصول بزنید 👇`;
+  msg += `\nبرای مدیریت هر محصول، روی آن بزنید 👇`;
   return { text: msg, totalPages, products };
 }
 
@@ -393,14 +407,30 @@ export async function productListMessage(
 export async function productDetailsMessage(slug: string): Promise<string | null> {
   const p = await db.product.findUnique({ where: { slug } });
   if (!p) return null;
+
+  // Sales stats for this product (only count orders that are confirmed or later)
+  const items = await db.orderItem.findMany({
+    where: { productId: p.id },
+    select: { quantity: true, total: true, order: { select: { orderStatus: true } } },
+  });
+  const soldActive = items.filter((it) =>
+    ["confirmed", "preparing", "shipped", "delivered"].includes(it.order.orderStatus)
+  );
+  const totalQty = soldActive.reduce((s, it) => s + it.quantity, 0);
+  const totalRev = soldActive.reduce((s, it) => s + it.total, 0);
+
   return (
-    `🍯 <b>جزئیات محصول</b>\n\n` +
+    `🍯 <b>جزئیات محصول</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
     `• نام: <b>${escapeHtml(p.name)}</b>\n` +
     `• شناسه: <code>${p.slug}</code>\n` +
     `• قیمت هر کیلو: <b>${formatToman(p.pricePerKg)}</b>\n` +
-    `• ویژه: ${p.featured ? "بله ⭐" : "خیر"}\n` +
-    `• منطقه: ${escapeHtml(p.origin)}\n\n` +
-    `📝 ${escapeHtml(p.description)}\n\n` +
+    `• ویژه: ${p.featured ? "بله ⭐" : "خیر"}\n\n` +
+    `📊 <b>آمار فروش</b>\n` +
+    `• تعداد فروش: <b>${toPersianDigits(totalQty)}</b> عدد\n` +
+    `• درآمد: <b>${formatToman(totalRev)}</b>\n\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `📝 <b>توضیحات:</b>\n${escapeHtml(p.description)}\n\n` +
     `💊 <b>خواص:</b>\n${escapeHtml(p.benefits)}`
   );
 }
@@ -416,9 +446,10 @@ export async function newOrderNotificationMessage(
   if (!order) return null;
 
   let msg =
-    `🆕 <b>سفارش جدید ثبت شد!</b>\n\n` +
-    `📋 شماره سفارش: <code>${order.orderNumber}</code>\n` +
-    `🕐 ${faDate(order.createdAt)}\n\n` +
+    `🆕 <b>سفارش جدید ثبت شد!</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `🔖 <code>${order.orderNumber}</code>\n` +
+    `📅 ${faDate(order.createdAt)}\n\n` +
     `👤 <b>مشتری:</b> ${escapeHtml(order.customerName)}\n` +
     `📱 <b>تلفن:</b> <code>${toPersianDigits(order.customerPhone)}</code>\n` +
     `📍 ${escapeHtml(order.province)} - ${escapeHtml(order.city)}\n` +
@@ -435,8 +466,7 @@ export async function newOrderNotificationMessage(
 
   msg +=
     `\n💵 <b>مبلغ نهایی:</b> <b>${formatToman(order.finalAmount)}</b>\n` +
-    `🔢 مبلغ یکتای پیگیری: <b>${formatNumber(order.uniqueAmount)} تومان</b>\n` +
-    `   (${formatRial(order.uniqueAmount)})\n`;
+    `🔢 مبلغ یکتای پیگیری: <b>${formatNumber(order.uniqueAmount)} تومان</b>\n`;
 
   if (order.notes) {
     msg += `\n📝 <b>یادداشت:</b>\n${escapeHtml(order.notes)}\n`;
@@ -457,101 +487,96 @@ export async function paymentConfirmedMessage(
   if (!order) return null;
 
   let msg =
-    `💳 <b>مشتری پرداخت را تأیید کرد!</b>\n\n` +
-    `📋 شماره سفارش: <code>${order.orderNumber}</code>\n` +
-    `🕐 ${faDate(order.createdAt)}\n\n` +
+    `💳 <b>مشتری پرداخت را تأیید کرد!</b>\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `🔖 <code>${order.orderNumber}</code>\n` +
+    `📅 ${faDate(order.createdAt)}\n\n` +
     `👤 ${escapeHtml(order.customerName)}\n` +
     `📱 <code>${toPersianDigits(order.customerPhone)}</code>\n` +
     `📍 ${escapeHtml(order.province)} - ${escapeHtml(order.city)}\n\n`;
 
   msg += `🛒 <b>اقلام:</b>\n`;
   order.items.forEach((it, i) => {
+    const waxTag = it.hasWax ? " 🐝" : "";
     msg +=
-      `${toPersianDigits(i + 1)}. ${escapeHtml(it.productName)} — ${toPersianDigits(it.containerSize)} کیلو ×${toPersianDigits(it.quantity)}\n`;
+      `${toPersianDigits(i + 1)}. ${escapeHtml(it.productName)} — ${toPersianDigits(it.containerSize)} کیلو ×${toPersianDigits(it.quantity)}${waxTag}\n`;
   });
 
   msg +=
     `\n💵 <b>مبلغ قابل واریز:</b> <b>${formatToman(order.finalAmount)}</b>\n` +
-    `🔢 مبلغ یکتا: <b>${formatNumber(order.uniqueAmount)} تومان</b>\n\n` +
-    `⚠️ لطفاً وجه را در حساب بانکی بررسی کرده و سپس سفارش را تأیید کنید.\n` +
-    `✅ پس از تأیید واریز، وضعیت را به «تأیید مدیریت» تغییر دهید.`;
+    `🔢 مبلغ یکتای پیگیری: <b>${formatNumber(order.uniqueAmount)} تومان</b>\n\n` +
+    `⚠️ <b>اقدام لازم:</b>\n` +
+    `۱. وجه را در حساب بانکی بررسی کنید (به مبلغ یکتا توجه کنید).\n` +
+    `۲. در صورت تأیید واریز، روی «✅ تأیید پرداخت» بزنید.\n` +
+    `۳. سفارش را برای آماده‌سازی برنامه‌ریزی کنید.`;
 
   return msg;
 }
 
-// ── Search results ───────────────────────────────────────────────────
-export async function searchMessage(query: string): Promise<string> {
-  const q = query.trim();
-  // Try order number match
-  const byOrderNumber = await db.order.findUnique({
-    where: { orderNumber: q.toUpperCase() },
-    select: {
-      orderNumber: true,
-      customerName: true,
-      customerPhone: true,
-      finalAmount: true,
-      orderStatus: true,
-      createdAt: true,
-    },
-  });
+// ── Search ───────────────────────────────────────────────────────────
+// Smart search: accepts order number (with or without HN-), phone (Persian digits OK).
+export async function searchOrders(query: string): Promise<any[]> {
+  const { orderNumber, phone } = normalizeSearchQuery(query);
 
-  if (byOrderNumber) {
+  if (orderNumber) {
+    const exact = await db.order.findUnique({
+      where: { orderNumber },
+      select: {
+        orderNumber: true,
+        customerName: true,
+        customerPhone: true,
+        finalAmount: true,
+        orderStatus: true,
+        createdAt: true,
+      },
+    });
+    if (exact) return [exact];
+  }
+
+  if (phone) {
+    const byPhone = await db.order.findMany({
+      where: { customerPhone: { contains: phone } },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      select: {
+        orderNumber: true,
+        customerName: true,
+        customerPhone: true,
+        finalAmount: true,
+        orderStatus: true,
+        createdAt: true,
+      },
+    });
+    if (byPhone.length > 0) return byPhone;
+  }
+
+  // Last resort: try raw query as order number (maybe admin typed something unusual)
+  return [];
+}
+
+export async function searchMessage(query: string): Promise<string> {
+  const results = await searchOrders(query);
+  if (results.length === 0) {
     return (
-      `🔍 <b>نتیجه جستجو</b>\n\n` +
-      `📋 <code>${byOrderNumber.orderNumber}</code>\n` +
-      `👤 ${escapeHtml(byOrderNumber.customerName)} | 📱 ${toPersianDigits(byOrderNumber.customerPhone)}\n` +
-      `${statusLabel(byOrderNumber.orderStatus)} | 💰 ${formatToman(byOrderNumber.finalAmount)}\n` +
-      `🕐 ${faTimeAgo(byOrderNumber.createdAt)}\n\n` +
-      `برای مشاهده جزئیات کامل روی دکمه زیر بزنید 👇`
+      `🔍 <b>جستجو</b>\n\n` +
+      `❌ نتیجه‌ای برای «${escapeHtml(query)}» یافت نشد.\n\n` +
+      `💡 می‌توانید وارد کنید:\n` +
+      `• شماره سفارش: <code>12345</code> یا <code>HN-12345</code>\n` +
+      `• شماره تلفن: <code>09123456789</code>\n\n` +
+      `📝 ارقام فارسی هم پشتیبانی می‌شوند.`
     );
   }
 
-  // Try phone match (partial)
-  const byPhone = await db.order.findMany({
-    where: { customerPhone: { contains: q } },
-    orderBy: { createdAt: "desc" },
-    take: 5,
-    select: {
-      orderNumber: true,
-      customerName: true,
-      customerPhone: true,
-      finalAmount: true,
-      orderStatus: true,
-      createdAt: true,
-    },
+  let msg =
+    `🔍 <b>نتایج جستجو برای «${escapeHtml(query)}»</b>\n` +
+    `📋 ${toPersianDigits(results.length)} نتیجه یافت شد:\n\n`;
+  results.forEach((o, i) => {
+    msg +=
+      `${toPersianDigits(i + 1)}. <code>${o.orderNumber}</code>\n` +
+      `   👤 ${escapeHtml(o.customerName)} | 📱 ${toPersianDigits(o.customerPhone)}\n` +
+      `   ${statusLabel(o.orderStatus)} | 💰 ${formatToman(o.finalAmount)}\n` +
+      `   🕐 ${faTimeAgo(o.createdAt)}\n\n`;
   });
-
-  if (byPhone.length > 0) {
-    let msg =
-      `🔍 <b>نتیجه جستجو برای «${escapeHtml(q)}»</b>\n\n` +
-      `📋 ${toPersianDigits(byPhone.length)} سفارش یافت شد:\n\n`;
-    byPhone.forEach((o, i) => {
-      msg +=
-        `${toPersianDigits(i + 1)}. <code>${o.orderNumber}</code>\n` +
-        `   👤 ${escapeHtml(o.customerName)} | 📱 ${toPersianDigits(o.customerPhone)}\n` +
-        `   ${statusLabel(o.orderStatus)} | 💰 ${formatToman(o.finalAmount)}\n` +
-        `   🕐 ${faTimeAgo(o.createdAt)}\n\n`;
-    });
-    msg += `برای مشاهده جزئیات، روی شماره سفارش بزنید 👇`;
-    return msg;
-  }
-
-  return `🔍 <b>جستجو</b>\n\n❌ نتیجه‌ای برای «${escapeHtml(q)}» یافت نشد.\nشماره سفارش (مثل HN-12345) یا شماره تلفن را دقیق وارد کنید.`;
-}
-
-// Helper to get search result orders for keyboard
-export async function searchOrders(query: string) {
-  const q = query.trim();
-  const byOrder = await db.order.findUnique({
-    where: { orderNumber: q.toUpperCase() },
-    select: { orderNumber: true, customerName: true, finalAmount: true },
-  });
-  if (byOrder) return [byOrder];
-  const byPhone = await db.order.findMany({
-    where: { customerPhone: { contains: q } },
-    orderBy: { createdAt: "desc" },
-    take: 5,
-    select: { orderNumber: true, customerName: true, finalAmount: true },
-  });
-  return byPhone;
+  msg += `برای مشاهده جزئیات، روی شماره سفارش بزنید 👇`;
+  return msg;
 }

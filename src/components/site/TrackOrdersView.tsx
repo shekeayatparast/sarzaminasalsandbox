@@ -352,7 +352,7 @@ export function TrackOrdersView() {
                 id="track-order"
                 value={orderNumber}
                 onChange={(e) => setOrderNumber(e.target.value)}
-                placeholder="مثلاً: HN-12345"
+                placeholder="مثلاً: 12345 یا HN-12345"
                 dir="ltr"
               />
             </div>

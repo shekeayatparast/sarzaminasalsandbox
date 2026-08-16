@@ -14,23 +14,37 @@ import {
   handleNoop,
   handleNewOrders,
   handleAllOrders,
+  handleTodayOrders,
+  handleVerifyOrders,
   handleStatusFilter,
   handleStatusOrders,
   handleOrderDetails,
   handleOrderStatusMenu,
   handleSetOrderStatus,
+  handleCancelOrder,
   handleCustomers,
   handleCustomerDetails,
+  handleCustomerOrders,
   handleProducts,
   handleProductDetails,
   handleProductEditPrice,
+  handleProductEditDesc,
+  handleProductToggleFeatured,
   handleTextMessage,
 } from "./src/handlers.js";
-import { notifyActionsKb } from "./src/keyboards.js";
+import { notifyNewOrderKb, notifyPaymentKb } from "./src/keyboards.js";
 import {
   newOrderNotificationMessage,
   paymentConfirmedMessage,
 } from "./src/messages.js";
+
+// ── Global error handlers (prevent silent crashes) ───────────────────
+process.on("uncaughtException", (e) => {
+  console.error("💥 UNCAUGHT EXCEPTION:", e);
+});
+process.on("unhandledRejection", (e) => {
+  console.error("💥 UNHANDLED REJECTION:", e);
+});
 
 // ── Create bot ───────────────────────────────────────────────────────
 const bot = new Bot(BOT_TOKEN);
@@ -44,30 +58,38 @@ bot.command("start", handleStart);
 bot.command("menu", handleStart);
 bot.command("help", handleHelp);
 
-// Callback queries — simple
+// Callback queries — simple navigation
 bot.callbackQuery("back", handleBack);
 bot.callbackQuery("stats", handleStats);
 bot.callbackQuery("search", handleSearch);
 bot.callbackQuery("noop", handleNoop);
 
-// Callback queries — orders
+// Callback queries — order lists
+bot.callbackQuery(/^today:(\d+)$/, handleTodayOrders);
+bot.callbackQuery(/^verify:(\d+)$/, handleVerifyOrders);
 bot.callbackQuery(/^new:(\d+)$/, handleNewOrders);
 bot.callbackQuery(/^all:(\d+)$/, handleAllOrders);
 bot.callbackQuery(/^st:([^:]+):(\d+)$/, handleStatusOrders);
+
+// Callback queries — order details & status
 bot.callbackQuery(/^o:(.+)$/, handleOrderDetails);
 bot.callbackQuery(/^os:(.+)$/, handleOrderStatusMenu);
 bot.callbackQuery(/^oss:([^:]+):(.+)$/, handleSetOrderStatus);
+bot.callbackQuery(/^ocancel:(.+)$/, handleCancelOrder);
 
 // Callback queries — customers
 bot.callbackQuery(/^cust:(\d+)$/, handleCustomers);
 bot.callbackQuery(/^c:(.+)$/, handleCustomerDetails);
+bot.callbackQuery(/^corders:(.+)$/, handleCustomerOrders);
 
 // Callback queries — products
 bot.callbackQuery(/^p:(\d+)$/, handleProducts);
 bot.callbackQuery(/^pd:(.+)$/, handleProductDetails);
 bot.callbackQuery(/^pe:(.+)$/, handleProductEditPrice);
+bot.callbackQuery(/^pdesc:(.+)$/, handleProductEditDesc);
+bot.callbackQuery(/^pf:(.+)$/, handleProductToggleFeatured);
 
-// Text messages (search + price edit)
+// Text messages (search + price/desc edit)
 bot.on("message:text", handleTextMessage);
 
 // Error handler
@@ -96,7 +118,7 @@ async function notifyNewOrder(orderNumber: string) {
     console.error("Order not found for notification:", orderNumber);
     return;
   }
-  await sendNotification(text, notifyActionsKb(orderNumber));
+  await sendNotification(text, notifyNewOrderKb(orderNumber));
 }
 
 async function notifyPaymentConfirmed(orderNumber: string) {
@@ -106,7 +128,7 @@ async function notifyPaymentConfirmed(orderNumber: string) {
     console.error("Order not found for notification:", orderNumber);
     return;
   }
-  await sendNotification(text, notifyActionsKb(orderNumber));
+  await sendNotification(text, notifyPaymentKb(orderNumber));
 }
 
 // ── HTTP server for notifications from Next.js ───────────────────────
@@ -128,7 +150,6 @@ const httpServer = Bun.serve({
         if (!orderNumber) {
           return Response.json({ error: "orderNumber required" }, { status: 400 });
         }
-        // Send notification asynchronously (don't block the response)
         notifyNewOrder(orderNumber).catch((e) =>
           console.error("notifyNewOrder failed:", e)
         );
@@ -169,14 +190,12 @@ console.log(`   GET  /health                   — health check`);
 // ── Start bot polling ────────────────────────────────────────────────
 async function startBot() {
   try {
-    // Initialize the bot (validates token, fetches bot info)
     await bot.init();
     console.log(
       `🤖 Telegram bot connected: @${bot.botInfo.username} (id: ${bot.botInfo.id})`
     );
     console.log(`👤 Admin ID: ${ADMIN_ID}`);
 
-    // Start long-polling (runs until stopped)
     bot.start({
       drop_pending_updates: true,
       allowed_updates: ["message", "callback_query"],

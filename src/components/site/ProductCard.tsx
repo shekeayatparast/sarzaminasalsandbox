@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatToman, toPersianDigits } from "@/lib/format";
 import { useNav } from "@/lib/store";
-import { Plus, MapPin, Droplets } from "lucide-react";
+import { Plus } from "lucide-react";
 
 export function ProductCard({
   product,
@@ -37,12 +37,6 @@ export function ProductCard({
           <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed">
             {product.description}
           </p>
-        </div>
-
-        {/* Origin */}
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <MapPin className="w-3.5 h-3.5 text-honey" />
-          <span>منشأ: {product.origin}</span>
         </div>
 
         {/* Price */}

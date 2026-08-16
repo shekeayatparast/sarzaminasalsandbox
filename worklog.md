@@ -132,3 +132,33 @@ Stage Summary:
 - Full-featured Telegram admin bot running on port 3003 with real-time order notifications + complete store management (orders, customers, products, stats, search).
 - Bot token: 8902705780 (test), Admin ID: 5207653104.
 - End-to-end flow: customer places order on website → Next.js API creates order → fires HTTP notification to bot → bot sends rich Telegram alert to admin with action buttons. Same for payment confirmation.
+
+---
+Task ID: fix-3
+Agent: main (orchestrator)
+Task: Remove product origin text + fix Persian keyboard tracking + comprehensive Telegram bot overhaul
+
+Work Log:
+- Site: Removed "منشأ: {origin}" display from ProductCard.tsx (deleted the entire origin section + MapPin icon import).
+- Site: Fixed order tracking for Persian keyboard users:
+  - Updated /api/orders/track route to convert Persian (۰-۹) AND Arabic-Indic (٠-٩) digits to ASCII.
+  - Order numbers now accept input without "HN-" prefix (auto-prepends): "12345" → "HN-12345".
+  - Also handles "hn-" lowercase, "HN12345" (no dash), and pure phone numbers entered in the order field.
+  - Updated TrackOrdersView placeholder to "مثلاً: 12345 یا HN-12345".
+- Bot: Complete rewrite of all 6 bot source files with admin-workflow-first design:
+  - format.ts: Added toAsciiDigits() for Persian/Arabic digit normalization, normalizeSearchQuery() that smart-detects order number vs phone (short digits → HN-XXXX, long digits → phone), nextStatus() for forward-only workflow, faDateShort(), improved status constants.
+  - keyboards.ts: Reorganized main menu by admin frequency-of-use (today → verify payments → all → stats → customers → products → search). Added context-aware orderActionsKb (primary action = next logical status), cancelConfirmKb, customerActionsKb with tel: link, productActionsKb with featured toggle + desc edit, notifyNewOrderKb + notifyPaymentKb (payment one has "✅ تأیید پرداخت" button).
+  - messages.ts: Richer messages with section separators (━━━), sales stats per product (qty + revenue), customer total spent (excluding cancelled), top products by revenue (confirmed+), better notification messages with clear action prompts.
+  - handlers.ts: Added cbData/cbPayload/cbPage helpers (critical fix: ctx.match is RegExpMatchArray not string in grammy regex callbacks). New handlers: handleTodayOrders, handleVerifyOrders (paid orders needing verification), handleCancelOrder (confirmation dialog), handleCustomerOrders, handleProductToggleFeatured, handleProductEditDesc. Multi-step state machine for price + description editing. Smart search with Persian digit support.
+  - index.ts: Registered all new callback patterns (today, verify, ocancel, corders, pdesc, pf). Added global uncaughtException/unhandledRejection handlers to prevent silent crashes.
+- Bot bug fix: The original bot crashed silently because (1) ctx.match was treated as string when it's a RegExpMatchArray, and (2) no global error handlers. Both fixed.
+- Bot daemon fix: The sandbox kills background processes when the parent bash command exits. Fixed by using `setsid -f` which fully detaches the process to init (PID 1), making it survive across commands.
+- Verified: Bot running on PID 12888, port 3003 listening, health endpoint responds, both notification endpoints (new-order + payment-confirmed) tested successfully — admin received real Telegram messages.
+- Verified with Agent Browser: "منشأ" text completely gone from products page (innerText check returns null). Order tracking with Persian digits "۵۳۵۷۷" (no HN-) finds order HN-53577 and displays full details. Order tracking with Persian phone "۰۹۹۱۷۸۴۵۱۲۶" also works.
+- Lint passes clean. Dev server log shows no errors.
+
+Stage Summary:
+- Site: Product origin text fully removed. Persian keyboard tracking fixed (accepts Persian/Arabic digits, works with or without HN- prefix, auto-detects phone vs order number).
+- Bot: Complete overhaul from admin's perspective. Main menu reorganized by daily workflow priority. New features: today's orders view, pending payment verification queue, smart search (Persian digits + no-prefix order numbers), forward-only status workflow with context-aware primary action, cancel confirmation dialog, customer order history, product featured toggle, product description editing, per-product sales stats, richer formatted messages with section separators.
+- Bot stability: Fixed silent crash from ctx.match type mismatch. Added global error handlers. Process now properly daemonized with setsid -f (parented to init, survives across bash commands).
+- Bot is live and waiting for admin interaction at @MeowAboosBot.
