@@ -1,13 +1,9 @@
 "use client";
 
 import { useNav } from "@/lib/store";
-import { Droplet, Phone, MapPin } from "lucide-react";
-import {
-  PAYMENT_CARD_NUMBER,
-  PAYMENT_CARD_HOLDER,
-  CONTACT_PHONE,
-  CONTACT_PHONE_RAW,
-} from "@/lib/products";
+import { Phone, MapPin } from "lucide-react";
+import Image from "next/image";
+import { CONTACT_PHONE, CONTACT_PHONE_RAW } from "@/lib/products";
 
 const NAV_LINKS = [
   { key: "home", label: "خانه" },
@@ -29,12 +25,17 @@ export function Footer() {
   return (
     <footer className="mt-auto bg-honey-dark text-primary-foreground/90">
       <div className="container mx-auto px-4 py-10">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {/* Brand */}
           <div className="md:col-span-1">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-10 h-10 rounded-full bg-honey-gradient flex items-center justify-center shadow">
-                <Droplet className="w-5 h-5 text-primary-foreground fill-primary-foreground" />
+            <div className="flex items-center gap-3 mb-3">
+              <div className="relative w-12 h-12 shrink-0">
+                <Image
+                  src="/images/logo.png"
+                  alt="لوگوی سرزمین عسل"
+                  fill
+                  className="object-contain"
+                />
               </div>
               <span className="font-extrabold text-xl">سرزمین عسل</span>
             </div>
@@ -83,27 +84,6 @@ export function Footer() {
                 <span>شهرکرد، چهارمحال و بختیاری</span>
               </li>
             </ul>
-          </div>
-
-          {/* Payment info */}
-          <div>
-            <h3 className="font-bold text-base mb-3 text-honey-light">
-              پرداخت سفارش
-            </h3>
-            <div className="bg-primary-foreground/10 rounded-lg p-3 text-sm">
-              <div className="text-primary-foreground/60 mb-1">
-                شماره کارت:
-              </div>
-              <div
-                dir="ltr"
-                className="font-mono text-base text-honey-light tracking-wider mb-2"
-              >
-                {PAYMENT_CARD_NUMBER}
-              </div>
-              <div className="text-primary-foreground/60">
-                به نام: {PAYMENT_CARD_HOLDER}
-              </div>
-            </div>
           </div>
         </div>
 

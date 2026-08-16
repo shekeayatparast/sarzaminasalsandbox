@@ -104,3 +104,31 @@ Stage Summary:
 - All 12 customer-reported issues resolved + added new order tracking feature.
 - Order status workflow ready for Telegram bot admin integration (admin will set orderStatus: confirmed/preparing/shipped/delivered/cancelled).
 - Waiting for customer to send logo file for integration.
+
+---
+Task ID: fix-2
+Agent: main (orchestrator)
+Task: Apply second round of customer feedback + build Telegram admin bot
+
+Work Log:
+- Fixed Switch component RTL bug: the thumb was overflowing the container when checked because translate-x was positive (LTR direction) in an RTL layout. Redesigned switch to h-6 w-11 with px-0.5 padding, size-5 thumb, and data-[state=checked]:-translate-x-5 (negative = left in RTL). Thumb now stays cleanly inside the track.
+- Copied customer's logo (upload/ChatGPT_Image...removebg-preview.png, 296x265 RGBA PNG) to public/images/logo.png.
+- Header: replaced Droplet icon placeholder with the actual logo image (Next.js Image, object-contain) in both the desktop header and the mobile Sheet menu.
+- Footer: removed the entire "پرداخت سفارش" (payment/card info) section; replaced Droplet icon with the logo image; changed grid from 4 columns to 3 columns (brand, quick links, contact).
+- HomeView: removed the floating "+۲۰ سال تجربه" badge from the about-teaser section's apiary image.
+- Built comprehensive Telegram admin bot as a mini-service (mini-services/telegram-bot/):
+  - grammy framework, long-polling, admin-only access (ID 5207653104)
+  - HTTP server on port 3003 for receiving notifications from Next.js
+  - Features: /start main menu, 📊 statistics dashboard (totals, revenue, today/week/month, top products, top customers), 📦 new orders list, 📋 all orders with status filter, order details with itemized items + customer info + delivery + payment, 🔄 status change workflow (7 statuses), 👥 customers list + details with order history, 🍯 products list + details + price editing (interactive flow), 🔍 search by order number or phone (plain text = search)
+  - Persian formatting (Jalali dates, Persian digits, toman/rial), HTML-formatted messages, inline keyboards with pagination
+  - New-order notification: rich message with all order details + action buttons (view, confirm, change status)
+  - Payment-confirmed notification: alert with order summary + verification prompt
+- Wired Next.js → bot notifications: created src/lib/notify-bot.ts (fire-and-forget fetch to localhost:3003). POST /api/orders now calls notifyBotNewOrder after creating an order. POST /api/orders/confirm now calls notifyBotPaymentConfirmed after marking payment confirmed.
+- Verified: bot connects as @MeowAboosBot, both notification endpoints tested successfully (admin received real Telegram messages for HN-14704 test), bot survives across separate bash commands using ( setsid ... & ) daemon pattern.
+- Lint passes clean.
+
+Stage Summary:
+- All 4 customer-reported UI issues fixed (switch overflow, footer payment removal, logo integration, +20 badge removal).
+- Full-featured Telegram admin bot running on port 3003 with real-time order notifications + complete store management (orders, customers, products, stats, search).
+- Bot token: 8902705780 (test), Admin ID: 5207653104.
+- End-to-end flow: customer places order on website → Next.js API creates order → fires HTTP notification to bot → bot sends rich Telegram alert to admin with action buttons. Same for payment confirmation.

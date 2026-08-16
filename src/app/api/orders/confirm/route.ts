@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { notifyBotPaymentConfirmed } from "@/lib/notify-bot";
 
 interface ConfirmBody {
   orderNumber: string;
@@ -40,6 +41,9 @@ export async function POST(req: NextRequest) {
       where: { id: order.id },
       data: { paymentStatus: "confirmed", orderStatus: "paid" },
     });
+
+    // Notify the Telegram bot so the admin can verify the payment
+    notifyBotPaymentConfirmed(order.orderNumber);
 
     return NextResponse.json({
       success: true,

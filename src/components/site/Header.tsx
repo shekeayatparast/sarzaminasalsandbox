@@ -4,9 +4,10 @@ import { useState, useEffect } from "react";
 import { useNav, useCart } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
-import { Menu, ShoppingBasket, Droplet } from "lucide-react";
+import { Menu, ShoppingBasket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toPersianDigits } from "@/lib/format";
+import Image from "next/image";
 
 const NAV_ITEMS = [
   { key: "home", label: "خانه" },
@@ -52,8 +53,14 @@ export function Header() {
             className="flex items-center gap-2 shrink-0 group"
             aria-label="سرزمین عسل - خانه"
           >
-            <div className="relative w-10 h-10 md:w-12 md:h-12 rounded-full bg-honey-gradient flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform">
-              <Droplet className="w-5 h-5 md:w-6 md:h-6 text-primary-foreground fill-primary-foreground" />
+            <div className="relative w-11 h-11 md:w-14 md:h-14 shrink-0 group-hover:scale-105 transition-transform">
+              <Image
+                src="/images/logo.png"
+                alt="لوگوی سرزمین عسل"
+                fill
+                className="object-contain drop-shadow-sm"
+                priority
+              />
             </div>
             <div className="text-right leading-tight">
               <div className="font-extrabold text-lg md:text-xl text-honey-dark">
@@ -118,8 +125,13 @@ export function Header() {
                 <SheetTitle className="sr-only">منوی اصلی</SheetTitle>
                 <div className="flex flex-col gap-2 p-6 pt-8">
                   <div className="flex items-center gap-2 mb-4 pb-4 border-b">
-                    <div className="w-10 h-10 rounded-full bg-honey-gradient flex items-center justify-center">
-                      <Droplet className="w-5 h-5 text-primary-foreground fill-primary-foreground" />
+                    <div className="relative w-11 h-11 shrink-0">
+                      <Image
+                        src="/images/logo.png"
+                        alt="لوگوی سرزمین عسل"
+                        fill
+                        className="object-contain"
+                      />
                     </div>
                     <span className="font-extrabold text-lg text-honey-dark">
                       سرزمین عسل

@@ -5,6 +5,7 @@ import {
   generateUniqueAmount,
 } from "@/lib/format";
 import { FREE_DELIVERY_CITY } from "@/lib/products";
+import { notifyBotNewOrder } from "@/lib/notify-bot";
 
 interface OrderItemInput {
   productId: string;
@@ -115,6 +116,9 @@ export async function POST(req: NextRequest) {
       },
       include: { items: true },
     });
+
+    // Notify the Telegram bot so the admin gets an instant alert
+    notifyBotNewOrder(created.orderNumber);
 
     return NextResponse.json({
       success: true,

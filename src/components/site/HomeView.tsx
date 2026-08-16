@@ -250,10 +250,6 @@ export function HomeView() {
                 className="w-full h-full object-cover"
               />
             </div>
-            <div className="absolute -bottom-5 -right-3 md:-right-5 bg-honey-gradient text-primary-foreground rounded-2xl p-4 shadow-xl">
-              <div className="text-3xl font-extrabold">+۲۰</div>
-              <div className="text-xs">سال تجربه</div>
-            </div>
           </div>
           <div>
             <Badge className="bg-accent text-accent-foreground border-0 mb-3">
