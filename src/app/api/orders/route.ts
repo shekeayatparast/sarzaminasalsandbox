@@ -60,7 +60,41 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Recompute total server-side to prevent tampering
+    // ── SECURITY: Re-validate EVERY item's unitPrice against the live DB.
+    // The admin may have changed product prices via the Telegram bot. The
+    // client-sent unitPrice is NEVER trusted — we always look up the
+    // product's current pricePerKg from the DB and recompute the unit price
+    // for the given container size. This guarantees customers always pay the
+    // current price, not a stale (potentially lower) cached price.
+    const productIds = [...new Set(body.items.map((i) => i.productId))];
+    const dbProducts = await db.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, name: true, pricePerKg: true },
+    });
+    const productMap = new Map(dbProducts.map((p) => [p.id, p]));
+
+    // Validate every item
+    for (const item of body.items) {
+      const p = productMap.get(item.productId);
+      if (!p) {
+        return NextResponse.json(
+          { error: `محصول یافت نشد: ${item.productName}` },
+          { status: 400 }
+        );
+      }
+      // Recompute the correct unit price from the live DB price
+      const expectedUnitPrice = Math.round(p.pricePerKg * item.containerSize);
+      if (item.unitPrice !== expectedUnitPrice) {
+        // Price mismatch — could be stale cache or tampering.
+        // Use the server-authoritative price.
+        item.unitPrice = expectedUnitPrice;
+      }
+      // Also sync the product name (admin may have renamed via bot? we don't
+      // support that yet, but sync anyway for consistency)
+      item.productName = p.name;
+    }
+
+    // Recompute total server-side from the validated unit prices
     const totalAmount = body.items.reduce(
       (s, i) => s + i.unitPrice * i.quantity,
       0

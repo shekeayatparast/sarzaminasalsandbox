@@ -16,7 +16,9 @@ export function ProductsView() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    fetch("/api/products")
+    // Use cache: 'no-store' so the admin's price/description/featured edits
+    // (made via the Telegram bot) are always reflected on the site.
+    fetch("/api/products", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
         setProducts(d.products || []);

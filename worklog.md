@@ -257,3 +257,54 @@ Stage Summary:
 - FIX: DB cleanup + hardened bot status handler (invariant enforced) + no-cache API + 15s auto-polling + manual refresh button + cache-busting.
 - Customer now sees admin status changes within 15 seconds automatically, or instantly via refresh button.
 - Bot-site sync is now robust: invariant (orderStatus ↔ paymentStatus) is enforced on every status change, preventing future inconsistencies.
+
+---
+Task ID: fix-6
+Agent: main (orchestrator)
+Task: Deep audit of bot-site synchronization + add auto-redirect to cart after Add to Cart
+
+Work Log:
+- Deep audit of ALL bot files (handlers, messages, keyboards, format, index) + ALL site files (store, AddToCartDialog, CartView, ProductsView, HomeView, page.tsx, products.ts, format.ts, notify-bot.ts, API routes).
+- Identified 6 sync issues between bot and site:
+  1. Products API had no no-cache headers → admin's price/desc/featured edits via bot could be served stale to site visitors.
+  2. Bot's product edit confirmation messages didn't mention site sync.
+  3. /api/orders POST trusted client-sent unitPrice — security issue + stale-price issue (if admin raised price via bot, old cached price could be submitted).
+  4. ProductsView and HomeView fetched products with default cache (could be stale).
+  5. No auto-redirect to cart after Add to Cart (user's explicit request).
+  6. Bot's price edit handler lacked validation bounds and old-vs-new diff display.
+
+- FIX 1 (Products API no-cache): Added `dynamic = "force-dynamic"`, `revalidate = 0`, `fetchCache = "force-no-store"` + explicit `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0`, `Pragma: no-cache`, `Expires: 0` headers to GET /api/products. Now admin's product edits via bot are ALWAYS reflected on the site.
+
+- FIX 2 (Bot edit confirmations): 
+  • Product price edit now shows: old price, new price, diff (🔺 increase / 🔻 decrease), and "🌐 این تغییر بلافاصله در سایت اعمال می‌شود." notice. Logs every price change.
+  • Product description edit now shows "🌐 این تغییر بلافاصله در سایت اعمال می‌شود." notice. Logs every desc change.
+  • Product featured toggle now shows the same site-sync notice + logs every toggle.
+  • Added price validation: rejects NaN, ≤0, and > 1,000,000,000 (sanity bound).
+
+- FIX 3 (SECURITY — server-side price validation): POST /api/orders now fetches ALL referenced products from DB, recomputes the correct unitPrice = round(pricePerKg × containerSize) for each item, and overrides any client-sent unitPrice that doesn't match. Also syncs the productName from DB. This prevents: (a) stale-price orders if admin changed price via bot but customer had old cached page, (b) malicious price tampering.
+
+- FIX 4 (Client no-cache fetches): ProductsView + HomeView now fetch /api/products with `cache: "no-store"` so the browser always hits the network for fresh product data.
+
+- FIX 5 (Auto-redirect to cart): AddToCartDialog's handleAdd() now:
+  1. Adds item to cart store
+  2. Resets dialog state (qty, wax)
+  3. Closes the dialog
+  4. Shows success toast with "در حال انتقال به سبد خرید..." description
+  5. After 250ms (for toast + dialog-close animation), navigates to "cart" view
+  • Button label changed from "افزودن به سبد خرید" → "افزودن به سبد و ادامه" (with ShoppingBasket icon) to set the expectation that they're going to the cart.
+  • Imported useNav from store + ShoppingBasket icon.
+
+- Restarted bot cleanly with `setsid -f bun --hot index.ts` (hot-reload picks up the handler changes).
+
+- Verified end-to-end with Agent Browser:
+  • Add-to-cart flow: Clicked "افزودن" on عسل گون → dialog opened → clicked "افزودن به سبد و ادامه" → ✅ page auto-navigated to cart, item shown ("اقلام سبد (۱)" + "عسل گون"), toast "عسل گون به سبد خرید اضافه شد - در حال انتقال به سبد خرید..." shown.
+  • Product price sync: Simulated admin changing gon price 1,400,000 → 1,550,000 via DB (same as bot does) → reloaded products page → site showed "۱,۵۵۰,۰۰۰ تومان" ✅. Restored to 1,400,000 → reloaded → site showed "۱,۴۰۰,۰۰۰ تومان" ✅.
+  • Full order lifecycle: Created real order HN-84196 via site API → bot received "📨 New order notification" ✅. Customer confirmed payment via /api/orders/confirm → bot received "💳 Payment confirmed notification" ✅. Admin (real, via bot) changed status paid→confirmed → bot logged "📊 Status change: HN-84196 paid → confirmed (payment: confirmed)" → site tracking page auto-polled and showed "تأیید مدیریت" ✅.
+  • No console errors, no runtime errors, lint clean.
+
+Stage Summary:
+- ALL identified sync issues FIXED. Bot and site now share a single source of truth (the SQLite DB) with proper no-cache semantics on both ends.
+- SECURITY FIX: Server now validates every order item's unitPrice against the live DB — customers can never pay a stale or tampered price.
+- USER REQUEST FULFILLED: Customers are now auto-redirected to the cart immediately after clicking "افزودن به سبد و ادامه" — they go straight to finalizing payment and completing their order.
+- Bot enhancements: Price edit shows old/new/diff + site-sync notice. Desc edit + featured toggle show site-sync notice. All edits logged. Price validation bounds added.
+- Verified live: bot@MeowAboosBot running on port 3003, admin ID 5207653104, full bidirectional sync working.

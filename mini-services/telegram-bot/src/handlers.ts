@@ -506,9 +506,10 @@ export async function handleProductToggleFeatured(ctx: Context) {
   const text = await productDetailsMessage(slug);
   await show(
     ctx,
-    `✅ محصول «${escapeHtml(p.name)}» ${p.featured ? "از ویژه‌ها حذف شد" : "به ویژه‌ها اضافه شد"}.\n\n${text || ""}`,
+    `✅ محصول «${escapeHtml(p.name)}» ${p.featured ? "از ویژه‌ها حذف شد" : "به ویژه‌ها اضافه شد"}.\n\n🌐 این تغییر بلافاصله در سایت اعمال می‌شود.\n\n${text || ""}`,
     productActionsKb(slug, !p.featured)
   );
+  console.log(`⭐ Product featured: ${slug} → ${!p.featured}`);
 }
 
 // ── Product price edit ───────────────────────────────────────────────
@@ -592,19 +593,45 @@ export async function handleTextMessage(ctx: Context) {
       );
       return;
     }
+    if (price > 1_000_000_000) {
+      await ctx.reply(
+        "❌ قیمت بیش از حد بزرگ است. لطفاً مقدار را بررسی کنید.",
+        { reply_markup: productActionsKb(state.slug), parse_mode: "HTML" }
+      );
+      return;
+    }
+    // Fetch old price for the diff message
+    const before = await db.product.findUnique({
+      where: { slug: state.slug },
+      select: { name: true, pricePerKg: true, featured: true },
+    });
+    if (!before) {
+      await ctx.reply("❌ محصول یافت نشد.", backKb());
+      return;
+    }
     await db.product.update({
       where: { slug: state.slug },
       data: { pricePerKg: price },
     });
-    const product = await db.product.findUnique({
-      where: { slug: state.slug },
-      select: { name: true, featured: true },
-    });
     const detailText = await productDetailsMessage(state.slug);
+    const diff = price - (before.pricePerKg || 0);
+    const diffStr =
+      diff === 0
+        ? "بدون تغییر"
+        : diff > 0
+        ? `🔺 افزایش: +${formatToman(diff)}`
+        : `🔻 کاهش: ${formatToman(Math.abs(diff))}`;
     await ctx.reply(
-      `✅ قیمت محصول «${escapeHtml(product?.name || "")}» با موفقیت به‌روزرسانی شد.\n` +
-        `💰 قیمت جدید هر کیلو: <b>${formatToman(price)}</b>\n\n${detailText || ""}`,
-      { parse_mode: "HTML", reply_markup: productActionsKb(state.slug, product?.featured || false) }
+      `✅ <b>قیمت محصول به‌روزرسانی شد</b>\n\n` +
+        `🍯 ${escapeHtml(before.name)}\n` +
+        `💰 قیمت قبلی: ${formatToman(before.pricePerKg)}\n` +
+        `💰 قیمت جدید: <b>${formatToman(price)}</b>\n` +
+        `📊 ${diffStr}\n\n` +
+        `🌐 این تغییر بلافاصله در سایت اعمال می‌شود.\n\n${detailText || ""}`,
+      { parse_mode: "HTML", reply_markup: productActionsKb(state.slug, before.featured) }
+    );
+    console.log(
+      `💰 Product price: ${state.slug} ${before.pricePerKg} → ${price}`
     );
     return;
   }
@@ -628,9 +655,10 @@ export async function handleTextMessage(ctx: Context) {
     });
     const detailText = await productDetailsMessage(state.slug);
     await ctx.reply(
-      `✅ توضیحات محصول «${escapeHtml(product?.name || "")}» به‌روزرسانی شد.\n\n${detailText || ""}`,
+      `✅ توضیحات محصول «${escapeHtml(product?.name || "")}» به‌روزرسانی شد.\n\n🌐 این تغییر بلافاصله در سایت اعمال می‌شود.\n\n${detailText || ""}`,
       { parse_mode: "HTML", reply_markup: productActionsKb(state.slug, product?.featured || false) }
     );
+    console.log(`📝 Product desc updated: ${state.slug}`);
     return;
   }
 

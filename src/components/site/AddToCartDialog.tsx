@@ -15,10 +15,10 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { CONTAINERS, BONUS_THRESHOLD_KG, BONUS_AMOUNT_KG } from "@/lib/products";
-import { useCart } from "@/lib/store";
+import { useCart, useNav } from "@/lib/store";
 import { containerPrice, formatToman, toPersianDigits } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Check, Minus, Plus, Gift, Info } from "lucide-react";
+import { Check, Minus, Plus, Gift, Info, ShoppingBasket } from "lucide-react";
 import { toast } from "sonner";
 
 export function AddToCartDialog({
@@ -34,6 +34,7 @@ export function AddToCartDialog({
   const [hasWax, setHasWax] = useState(false);
   const [qty, setQty] = useState(1);
   const addItem = useCart((s) => s.addItem);
+  const { navigate } = useNav();
 
   const container = useMemo(
     () => CONTAINERS.find((c) => c.size === size) ?? CONTAINERS[1],
@@ -69,10 +70,16 @@ export function AddToCartDialog({
       unitPrice,
       image: product.image,
     });
-    toast.success(`${product.name} به سبد خرید اضافه شد`);
-    onOpenChange(false);
+    // Reset dialog state
     setQty(1);
     setHasWax(false);
+    onOpenChange(false);
+    // ✅ Immediately navigate to the cart so the customer can finalize payment
+    toast.success(`${product.name} به سبد خرید اضافه شد`, {
+      description: "در حال انتقال به سبد خرید...",
+    });
+    // Small delay so the toast + dialog close animation are visible before nav
+    setTimeout(() => navigate("cart"), 250);
   };
 
   if (!product) return null;
@@ -244,8 +251,8 @@ export function AddToCartDialog({
             onClick={handleAdd}
             className="w-full bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-md h-12 text-base font-bold"
           >
-            <Plus className="w-5 h-5 ml-1" />
-            افزودن به سبد خرید
+            <ShoppingBasket className="w-5 h-5 ml-1.5" />
+            افزودن به سبد و ادامه
           </Button>
         </DialogFooter>
       </DialogContent>
