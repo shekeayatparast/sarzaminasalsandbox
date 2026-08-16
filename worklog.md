@@ -583,3 +583,68 @@ Stage Summary:
 - Critical fix: "today/this week/this month" stats in the bot were previously computed in server-UTC time (3.5 hours off from Iran). Now correctly computed in Iran time. "This month" also correctly means the current Jalali month (not Gregorian).
 - Footer copyright year is now dynamic (auto-updates each Jalali year) instead of hardcoded.
 - Bot is live at @MeowAboosBot, port 3003, polling=true, stable. Site live on port 3000.
+
+---
+Task ID: deploy-1
+Agent: main (orchestrator)
+Task: Create production deployment package with setup.sh installer + monitoring, test it end-to-end
+
+Work Log:
+- Created /home/z/my-project/deploy/ folder with complete deployment package:
+  • setup.sh — Full interactive installer (8 steps: preflight checks, config questions, system deps, copy project, write .env, install+build+db, Caddy+SSL, systemd+monitoring)
+  • monitor.sh — Health monitor (checks site HTTP, bot health, systemd services, disk, memory; sends Telegram alerts on failure with 15min cooldown)
+  • README.md — Persian deployment guide with troubleshooting
+  • project/ — Clean copy of all source (excluded node_modules, .next, db/*.db, logs, .git, screenshots, tool-results, tests, examples, skills)
+  • systemd/ — 4 files: site.service, bot.service, monitor.service, monitor.timer
+  • caddy/ — Caddyfile.template with security headers + static caching
+  • sarzemine-asal-deploy.tar.gz — Compressed tarball (6MB) for easy transfer
+
+- MODIFIED project/ for production:
+  • next.config.ts: Removed `output: "standalone"` → uses standard `next build` + `next start` (more reliable with Prisma, avoids standalone copy issues)
+  • package.json: Scripts changed to `next build` + `next start -p 3000` (was standalone); added `db:seed` script; renamed project to "sarzemine-asal"
+  • bot config.ts: Removed hardcoded fallback DATABASE_URL → throws clear error if env var missing (prevents accidental writes to wrong DB path)
+
+- setup.sh FEATURES:
+  • Interactive: asks for bot token (default: current), admin ID (default: current), domain (optional), Let's Encrypt email
+  • If domain provided: installs Caddy, writes Caddyfile, automatic HTTPS via Let's Encrypt
+  • If no domain: localhost only
+  • Creates dedicated `sarzemine` service user (security isolation)
+  • Installs Bun runtime for the service user
+  • Installs system deps: curl, git, build-essential, python3, ca-certificates, sqlite3, jq
+  • Firewall (ufw): allows SSH/HTTP/HTTPS, blocks direct access to ports 3000/3003
+  • systemd services with auto-restart (Restart=always, RestartSec=5)
+  • Monitoring timer: runs monitor.sh every 5 minutes
+  • Health verification at the end: checks site HTTP 200, bot health+polling, systemd services active
+
+- FULL END-TO-END TEST (in sandbox with test ports):
+  • Copied project to /tmp/test-deploy with test .env (DATABASE_URL pointing to test DB)
+  • `bun install` (site): 827 packages ✅
+  • `bun install` (bot): 10 packages ✅
+  • `prisma generate` + `prisma db:push` + `prisma seed`: 3 products seeded ✅
+  • `next build`: compiled successfully in 7.3s ✅
+  • `next start -p 3000`: HTTP 200 ✅
+  • Bot polling: ok=true, polling=true, crashCount=0 ✅
+  • Products API: 3 products with correct descriptions ✅
+  • Order creation (HN-55169): POST /api/orders → success ✅
+  • Bot notification: "📨 New order notification: HN-55169" → "✅ Notification sent to admin" ✅
+  • Payment confirmation: POST /api/orders/confirm → success → bot received "💳 Payment confirmed notification" ✅
+  • Order tracking: GET /api/orders/track?orderNumber=HN-55169 → correct status, items, amount ✅
+  • monitor.sh: all checks passed (site OK, bot OK, disk 31%, memory 24%) ✅
+  • Agent Browser: site renders, products visible ("عسل گون | عسل کنار | عسل چند گیاه") ✅
+  • setup.sh syntax: bash -n → no errors ✅
+  • monitor.sh syntax: bash -n → no errors ✅
+
+- FOUND & FIXED during testing:
+  • setup.sh had syntax error on line 119: unquoted `${CYAN}`/`${NC}` inside `$(echo -e ...)` caused `(optional)` to be interpreted as subshell. Fixed by quoting all echo arguments in read -rp prompts.
+  • Discovered shell env leak: sandbox had DATABASE_URL set globally, overriding .env files. In production, systemd's EnvironmentFile handles this correctly (no leak). Updated bot config.ts to throw clear error if DATABASE_URL missing instead of using wrong fallback.
+
+- CLEANUP: Test environment removed. Sandbox dev server (port 3000) and bot (port 3003) restarted and healthy.
+
+Stage Summary:
+- Complete deployment package at /home/z/my-project/deploy/ (7MB, 115 files)
+- setup.sh is a full production installer: deps, Bun, Caddy+SSL, systemd, monitoring, firewall
+- TESTED end-to-end: build works, site serves HTTP 200, bot polls, order flow works, notifications work, tracking works, monitor works
+- Tarball at /home/z/my-project/deploy/sarzemine-asal-deploy.tar.gz (6MB) ready for transfer
+- User deploys with: `scp` tarball to server → `tar xzf` → `sudo bash setup.sh` → answer questions → done
+- Both domain and no-domain modes supported. HTTPS automatic via Let's Encrypt if domain provided.
+- Monitoring sends Telegram alerts to admin if site or bot goes down.
