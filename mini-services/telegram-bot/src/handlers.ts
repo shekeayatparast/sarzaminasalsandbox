@@ -122,13 +122,28 @@ export async function answerCallbacks(ctx: Context, next: () => Promise<void>) {
   return next();
 }
 
+// ── Helper: fetch live counts for the main menu ─────────────────────
+// The main menu shows count badges for the two most actionable items:
+// today's orders and orders awaiting payment verification.
+async function fetchMainMenuStats(): Promise<{ todayCount: number; verifyCount: number }> {
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const [todayCount, verifyCount] = await Promise.all([
+    db.order.count({ where: { createdAt: { gte: todayStart } } }),
+    db.order.count({ where: { orderStatus: "paid" } }),
+  ]);
+  return { todayCount, verifyCount };
+}
+
 // ── /start, /menu ────────────────────────────────────────────────────
 export async function handleStart(ctx: Context) {
   clearState(ctx.from?.id || 0);
   const name = ctx.from?.first_name || "";
-  await ctx.reply(welcomeMessage(name), {
+  const { todayCount, verifyCount } = await fetchMainMenuStats();
+  await ctx.reply(welcomeMessage(name, todayCount, verifyCount), {
     parse_mode: "HTML",
-    reply_markup: mainMenuKb(),
+    reply_markup: mainMenuKb(todayCount, verifyCount),
     disable_web_page_preview: true,
   });
 }
@@ -144,8 +159,8 @@ export async function handleHelp(ctx: Context) {
     `📊 <b>آمار:</b> گزارش جامع فروش، درآمد و پرفروش‌ترین محصولات\n` +
     `👥 <b>مشتریان:</b> لیست مشتریان و سوابق خرید\n` +
     `🍯 <b>محصولات:</b> مشاهده، ویرایش قیمت، توضیحات و وضعیت ویژه\n` +
-    `🔍 <b>جستجو:</b> یافتن سفارش با شماره یا تلفن مشتری\n\n` +
-    `💡 <b>جستجوی سریع:</b> کافیست شماره سفارش (مثل <code>12345</code> یا <code>HN-12345</code>) یا شماره تلفن مشتری را مستقیماً ارسال کنید. ارقام فارسی هم پشتیبانی می‌شوند.\n\n` +
+    `🔍 <b>جستجو:</b> یافتن سفارش با شماره سفارش، تلفن، یا نام مشتری\n\n` +
+    `💡 <b>جستجوی سریع:</b> کافیست شماره سفارش (مثل <code>12345</code> یا <code>HN-12345</code>)، شماره تلفن مشتری، یا نام مشتری را مستقیماً ارسال کنید. ارقام فارسی هم پشتیبانی می‌شوند.\n\n` +
     `🔔 با ثبت هر سفارش جدید یا تأیید پرداخت توسط مشتری، به طور خودکار به شما اطلاع داده می‌شود.\n\n` +
     `📋 <b>گردش کار پیشنهادی:</b>\n` +
     `۱. مشتری سفارش ثبت می‌کند → به شما اطلاع داده می‌شود\n` +
@@ -153,9 +168,10 @@ export async function handleHelp(ctx: Context) {
     `۳. شما وجه را در حساب بررسی می‌کنید و «✅ تأیید پرداخت» را می‌زنید\n` +
     `۴. سفارش را آماده کرده و وضعیت را به «📦 در حال آماده‌سازی» تغییر می‌دهید\n` +
     `۵. پس از ارسال، وضعیت را به «🚚 ارسال شد» و سپس «🏁 تحویل داده شد» تغییر می‌دهید`;
+  const { todayCount, verifyCount } = await fetchMainMenuStats();
   await ctx.reply(msg, {
     parse_mode: "HTML",
-    reply_markup: mainMenuKb(),
+    reply_markup: mainMenuKb(todayCount, verifyCount),
     disable_web_page_preview: true,
   });
 }
@@ -164,7 +180,8 @@ export async function handleHelp(ctx: Context) {
 export async function handleBack(ctx: Context) {
   clearState(ctx.from?.id || 0);
   const name = ctx.from?.first_name || "";
-  await show(ctx, welcomeMessage(name), mainMenuKb());
+  const { todayCount, verifyCount } = await fetchMainMenuStats();
+  await show(ctx, welcomeMessage(name, todayCount, verifyCount), mainMenuKb(todayCount, verifyCount));
 }
 
 // ── Statistics ───────────────────────────────────────────────────────
@@ -290,43 +307,72 @@ export async function handleOrderStatusMenu(ctx: Context) {
 }
 
 // ── Set order status ─────────────────────────────────────────────────
+// This is the admin's primary manual action — changing an order's status.
+// It handles the full status workflow: awaiting_payment → paid → confirmed
+// → preparing → shipped → delivered (plus cancelled as a side state).
+// When the admin advances to "confirmed" or later, payment is also marked
+// as confirmed. When moved back to "awaiting_payment", payment resets to pending.
 export async function handleSetOrderStatus(ctx: Context) {
   // pattern: oss:<orderNumber>:<status>  (orderNumber has no colon, so parts[1]=orderNumber, parts[2]=status)
   const parts = cbData(ctx).split(":");
   const orderNumber = parts[1];
   const status = parts[2];
 
-  const order = await db.order.findUnique({
-    where: { orderNumber },
-    select: { id: true, customerName: true },
-  });
-  if (!order) {
-    await show(ctx, "❌ سفارش یافت نشد.", backKb());
+  // Validate the status is a known value
+  const validStatuses = [
+    "awaiting_payment", "paid", "confirmed", "preparing", "shipped", "delivered", "cancelled",
+  ];
+  if (!validStatuses.includes(status)) {
+    await show(ctx, "❌ وضعیت نامعتبر است.", backKb());
     return;
   }
 
-  await db.order.update({
-    where: { id: order.id },
-    data: {
-      orderStatus: status,
-      // If admin moves to confirmed or later, also mark payment as confirmed
-      paymentStatus:
-        status === "confirmed" || status === "preparing" || status === "shipped" || status === "delivered"
-          ? "confirmed"
-          : status === "awaiting_payment"
-          ? "pending"
-          : undefined,
-    },
-  });
+  try {
+    const order = await db.order.findUnique({
+      where: { orderNumber },
+      select: { id: true, customerName: true, orderStatus: true },
+    });
+    if (!order) {
+      await show(ctx, "❌ سفارش یافت نشد.", backKb());
+      return;
+    }
 
-  const text = await orderDetailsMessage(orderNumber);
-  const msg =
-    `✅ <b>وضعیت سفارش به‌روزرسانی شد</b>\n\n` +
-    `📋 <code>${orderNumber}</code>\n` +
-    `👤 ${escapeHtml(order.customerName)}\n` +
-    `📊 وضعیت جدید: ${statusLabel(status)}\n\n` +
-    (text || "");
-  await show(ctx, msg, orderActionsKb(orderNumber, status));
+    // If status hasn't changed, no-op (avoid unnecessary writes)
+    if (order.orderStatus === status) {
+      const text = await orderDetailsMessage(orderNumber);
+      await show(ctx, `ℹ️ وضعیت سفارش از قبل «${statusLabel(status)}» بود.\n\n${text || ""}`, orderActionsKb(orderNumber, status));
+      return;
+    }
+
+    await db.order.update({
+      where: { id: order.id },
+      data: {
+        orderStatus: status,
+        // If admin moves to confirmed or later, also mark payment as confirmed
+        paymentStatus:
+          status === "confirmed" || status === "preparing" || status === "shipped" || status === "delivered"
+            ? "confirmed"
+            : status === "awaiting_payment"
+            ? "pending"
+            : undefined,
+      },
+    });
+
+    console.log(`📊 Status change: ${orderNumber} ${order.orderStatus} → ${status}`);
+
+    const text = await orderDetailsMessage(orderNumber);
+    const msg =
+      `✅ <b>وضعیت سفارش به‌روزرسانی شد</b>\n\n` +
+      `📋 <code>${orderNumber}</code>\n` +
+      `👤 ${escapeHtml(order.customerName)}\n` +
+      `📊 وضعیت قبلی: ${statusLabel(order.orderStatus)}\n` +
+      `📊 وضعیت جدید: ${statusLabel(status)}\n\n` +
+      (text || "");
+    await show(ctx, msg, orderActionsKb(orderNumber, status));
+  } catch (e) {
+    console.error("handleSetOrderStatus error:", e);
+    await show(ctx, "❌ خطا در به‌روزرسانی وضعیت سفارش. دوباره تلاش کنید.", backKb());
+  }
 }
 
 // ── Cancel order confirmation ────────────────────────────────────────
@@ -495,10 +541,11 @@ export async function handleSearch(ctx: Context) {
   await show(
     ctx,
     `🔍 <b>جستجوی سفارش</b>\n\n` +
-      `شماره سفارش یا شماره تلفن مشتری را ارسال کنید.\n\n` +
+      `شماره سفارش، شماره تلفن، یا نام مشتری را ارسال کنید.\n\n` +
       `💡 <b>نمونه‌ها:</b>\n` +
       `• شماره سفارش: <code>12345</code> یا <code>HN-12345</code>\n` +
-      `• شماره تلفن: <code>09123456789</code>\n\n` +
+      `• شماره تلفن: <code>09123456789</code>\n` +
+      `• نام مشتری: <code>علی</code>\n\n` +
       `📝 ارقام فارسی هم پشتیبانی می‌شوند.\n` +
       `همچنین می‌توانید مستقیماً متن را ارسال کنید — همیشه به عنوان جستجو در نظر گرفته می‌شود.`,
     backKb()

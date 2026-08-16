@@ -1,5 +1,7 @@
 // Inline keyboards for the Telegram bot
-// Organized around the admin's daily workflow: today → pending payments → all → customers → products → stats.
+// Organized around the admin's daily workflow:
+//   today → pending payments → all → customers → products → stats → search
+// Main menu shows LIVE count badges so the admin sees actionable items at a glance.
 import { InlineKeyboard } from "grammy";
 import {
   toPersianDigits,
@@ -11,17 +13,20 @@ import {
 } from "./format.js";
 
 // ── Main menu ────────────────────────────────────────────────────────
-// Ordered by frequency of use: the admin opens the bot dozens of times
-// a day to check today's pipeline and pending payment verifications.
-export const mainMenuKb = () =>
-  new InlineKeyboard()
-    .text("📦 سفارش‌های امروز", "today:0").row()
-    .text("💳 در انتظار تأیید پرداخت", "verify:0").row()
+// The two most actionable items (today's orders, pending payment verifications)
+// show live count badges so the admin instantly knows what needs attention.
+export const mainMenuKb = (todayCount = 0, verifyCount = 0) => {
+  const todayBadge = todayCount > 0 ? ` (${toPersianDigits(todayCount)})` : "";
+  const verifyBadge = verifyCount > 0 ? ` (${toPersianDigits(verifyCount)})` : "";
+  return new InlineKeyboard()
+    .text(`📦 سفارش‌های امروز${todayBadge}`, "today:0").row()
+    .text(`💳 در انتظار تأیید پرداخت${verifyBadge}`, "verify:0").row()
     .text("📋 همه سفارش‌ها", "all:0").row()
     .text("📊 آمار و گزارش‌ها", "stats").row()
     .text("👥 مشتریان", "cust:0").row()
     .text("🍯 محصولات", "p:0").row()
     .text("🔍 جستجو", "search");
+};
 
 // Back-to-main button
 export const backKb = () => new InlineKeyboard().text("🔙 منوی اصلی", "back");
@@ -37,7 +42,8 @@ export const statusFilterKb = () => {
 };
 
 // ── Pagination row ───────────────────────────────────────────────────
-// Helper to append a pagination row to an existing keyboard.
+// The page indicator (e.g. "۱ / ۳") doubles as a refresh button —
+// clicking it re-fetches the current page. No extra button needed.
 export const addPagination = (
   kb: InlineKeyboard,
   prefix: string,
@@ -46,7 +52,8 @@ export const addPagination = (
 ): void => {
   if (totalPages <= 1) return;
   if (page > 0) kb.text("◀️ قبلی", `${prefix}:${page - 1}`);
-  kb.text(`${toPersianDigits(page + 1)} / ${toPersianDigits(totalPages)}`, "noop");
+  // Page indicator = refresh (callback data re-runs the list handler for this page)
+  kb.text(`🔄 ${toPersianDigits(page + 1)} / ${toPersianDigits(totalPages)}`, `${prefix}:${page}`);
   if (page < totalPages - 1) kb.text("بعدی ▶️", `${prefix}:${page + 1}`);
   kb.row();
 };
@@ -73,15 +80,16 @@ export const orderListKb = (
 
 // ── Order detail action buttons ──────────────────────────────────────
 // Context-aware: the primary action is always the NEXT logical status.
-// Destructive actions (cancel) are separated.
+// Quick-nav to the payment-verification queue is always available
+// (the admin's most frequent loop: confirm one → go to next).
+// Destructive actions (cancel) are separated with a confirmation step.
 export const orderActionsKb = (orderNumber: string, currentStatus: string) => {
   const kb = new InlineKeyboard();
   const nxt = nextStatus(currentStatus);
 
   // Primary action: advance to next status
   if (nxt) {
-    const label = nextActionLabel(nxt);
-    kb.text(label, `oss:${orderNumber}:${nxt}`).row();
+    kb.text(nextActionLabel(nxt), `oss:${orderNumber}:${nxt}`).row();
   }
 
   // Secondary: full status menu (for corrections / jumps)
@@ -91,6 +99,9 @@ export const orderActionsKb = (orderNumber: string, currentStatus: string) => {
   if (currentStatus !== "cancelled" && currentStatus !== "delivered") {
     kb.text("❌ لغو سفارش", `ocancel:${orderNumber}`).row();
   }
+
+  // Quick-nav to payment verification queue (admin's most common loop)
+  kb.text("💳 در انتظار تأیید پرداخت", "verify:0").row();
 
   // Navigation
   kb.text("🔙 منوی اصلی", "back");
@@ -110,8 +121,8 @@ function nextActionLabel(nextStatus: string): string {
 }
 
 // ── Status change keyboard ───────────────────────────────────────────
-// Shows ALL statuses so the admin can correct mistakes, but groups
-// forward statuses first, then cancel.
+// Shows ALL statuses so the admin can correct mistakes or jump statuses.
+// Forward statuses first, then cancel last.
 export const orderStatusKb = (orderNumber: string) => {
   const kb = new InlineKeyboard();
   for (const s of FORWARD_STATUSES) {
@@ -145,11 +156,14 @@ export const customerListKb = (
 };
 
 // ── Customer detail actions ──────────────────────────────────────────
+// The phone number is shown in the message body inside <code> tags so the
+// admin can tap-to-copy it. Telegram inline keyboards don't support tel:
+// URLs, so there's no direct "call" button — copy + dial is the flow.
 export const customerActionsKb = (phone: string) =>
   new InlineKeyboard()
-    .text("📞 تماس با مشتری", `ctel:${phone}`).row()
     .text("📋 سفارش‌های این مشتری", `corders:${phone}`).row()
     .text("👥 لیست مشتریان", "cust:0").row()
+    .text("🔍 جستجوی سفارش", "search").row()
     .text("🔙 منوی اصلی", "back");
 
 // ── Product list keyboard ────────────────────────────────────────────
@@ -178,12 +192,14 @@ export const productActionsKb = (slug: string, featured: boolean = false) =>
 
 // ── Notification action buttons ──────────────────────────────────────
 // For new-order alerts: the customer hasn't paid yet, so the admin can
-// only view. For payment-confirmed alerts: the admin can verify payment.
+// only view the order details.
 export const notifyNewOrderKb = (orderNumber: string) =>
   new InlineKeyboard()
     .text("👁️ مشاهده سفارش", `o:${orderNumber}`).row()
     .text("🔙 منوی اصلی", "back");
 
+// For payment-confirmed alerts: the admin can verify the payment in one tap.
+// "✅ تأیید پرداخت" advances the order from "paid" → "confirmed".
 export const notifyPaymentKb = (orderNumber: string) =>
   new InlineKeyboard()
     .text("✅ تأیید پرداخت", `oss:${orderNumber}:confirmed`).row()

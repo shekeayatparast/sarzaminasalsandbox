@@ -1,5 +1,12 @@
 // Message builders — produce HTML-formatted strings for the Telegram bot.
 // All messages are designed for an admin who needs dense, scannable info.
+// Key design principles:
+//   • Every actionable order shows its tracking amount prominently
+//     (the admin matches this against bank statements to verify payment).
+//   • The welcome message shows a live summary so the admin knows what
+//     needs attention before tapping anything.
+//   • Search falls back to customer-name matching so the admin can find
+//     orders by name, phone, OR order number.
 import { db } from "./db.js";
 import {
   toPersianDigits,
@@ -19,13 +26,29 @@ import {
 const PAGE_SIZE = 5;
 
 // ── Main menu / welcome ──────────────────────────────────────────────
-export const welcomeMessage = (firstName: string): string => {
+// Shows a live summary of today's pipeline so the admin instantly knows
+// what needs attention.
+export const welcomeMessage = (
+  firstName: string,
+  todayCount = 0,
+  verifyCount = 0
+): string => {
   const name = firstName ? ` ${escapeHtml(firstName)}` : "";
+  let summary = "";
+  if (todayCount > 0 || verifyCount > 0) {
+    const parts: string[] = [];
+    if (todayCount > 0)
+      parts.push(`📦 ${toPersianDigits(todayCount)} سفارش امروز`);
+    if (verifyCount > 0)
+      parts.push(`💳 ${toPersianDigits(verifyCount)} در انتظار تأیید پرداخت`);
+    summary = `\n📋 <b>خلاصه:</b> ${parts.join(" | ")}\n`;
+  }
   return (
     `🍯 <b>سرزمین عسل — پنل مدیریت فروش</b>\n\n` +
     `سلام${name} عزیز 👋\n` +
-    `به ربات مدیریت فروشگاه خوش آمدید.\n\n` +
-    `💡 <b>نکته:</b> برای جستجوی سریع، شماره سفارش (مثل <code>12345</code> یا <code>HN-12345</code>) یا شماره تماس مشتری را مستقیماً ارسال کنید.\n\n` +
+    `به ربات مدیریت فروشگاه خوش آمدید.\n` +
+    summary +
+    `\n💡 <b>جستجوی سریع:</b> شماره سفارش (مثل <code>12345</code>)، شماره تلفن، یا نام مشتری را مستقیماً ارسال کنید.\n` +
     `🔔 با ثبت هر سفارش یا تأیید پرداخت، به طور خودکار به شما اطلاع داده می‌شود.`
   );
 };
@@ -104,6 +127,33 @@ export async function statsMessage(): Promise<string> {
     },
   });
 
+  // Top customers by total spent (confirmed-or-later, excluding cancelled)
+  const customerAgg = await db.order.groupBy({
+    by: ["customerPhone"],
+    _sum: { finalAmount: true },
+    _count: true,
+    orderBy: { _sum: { finalAmount: "desc" } },
+    take: 5,
+    where: {
+      orderStatus: { in: ["confirmed", "preparing", "shipped", "delivered"] },
+    },
+  });
+
+  // Fetch names for top customers
+  const topCustomers: { phone: string; name: string; spent: number; count: number }[] = [];
+  for (const c of customerAgg) {
+    const one = await db.order.findFirst({
+      where: { customerPhone: c.customerPhone },
+      select: { customerName: true },
+    });
+    topCustomers.push({
+      phone: c.customerPhone,
+      name: one?.customerName || "—",
+      spent: c._sum.finalAmount || 0,
+      count: c._count,
+    });
+  }
+
   const revenue = revenueAgg._sum.finalAmount || 0;
   const todayRev = todayAgg._sum.finalAmount || 0;
   const weekRev = weekAgg._sum.finalAmount || 0;
@@ -143,6 +193,19 @@ export async function statsMessage(): Promise<string> {
       msg +=
         `${toPersianDigits(i + 1)}. ${escapeHtml(p.productName)}\n` +
         `   📦 ${toPersianDigits(p._sum.quantity || 0)} عدد — ${formatToman(p._sum.total || 0)}\n`;
+    });
+  }
+
+  if (topCustomers.length > 0) {
+    msg +=
+      `\n━━━━━━━━━━━━━━━━━\n` +
+      `🏆 <b>برترین مشتریان</b>\n` +
+      `━━━━━━━━━━━━━━━━━\n`;
+    topCustomers.forEach((c, i) => {
+      msg +=
+        `${toPersianDigits(i + 1)}. ${escapeHtml(c.name)}\n` +
+        `   📦 ${toPersianDigits(c.count)} سفارش — ${formatToman(c.spent)}\n` +
+        `   📱 <code>${toPersianDigits(c.phone)}</code>\n`;
     });
   }
 
@@ -198,6 +261,8 @@ export async function orderListMessage(
 }
 
 // ── Order details (full) ─────────────────────────────────────────────
+// Shows everything the admin needs: customer, delivery, items, bill,
+// status, tracking amount (for bank verification), and last update time.
 export async function orderDetailsMessage(orderNumber: string): Promise<string | null> {
   const order = await db.order.findUnique({
     where: { orderNumber },
@@ -245,6 +310,7 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
     `• مبلغ کالاها: ${formatToman(order.totalAmount)}\n` +
     `• مبلغ یکتای پیگیری: <b>${formatNumber(order.uniqueAmount)} تومان</b>\n` +
     `   (${formatRial(order.uniqueAmount)})\n` +
+    `   🔍 <i>این مبلغ را در صورت‌حساب بانکی جستجو کنید</i>\n` +
     `• مبلغ نهایی قابل پرداخت: <b>${formatToman(order.finalAmount)}</b>\n` +
     `   (${formatRial(order.finalAmount)})\n\n`;
 
@@ -253,11 +319,12 @@ export async function orderDetailsMessage(orderNumber: string): Promise<string |
     `📊 <b>وضعیت</b>\n` +
     `━━━━━━━━━━━━━━━━━\n` +
     `• پرداخت: ${order.paymentStatus === "confirmed" ? "✅ تأیید شده" : "⏳ در انتظار"}\n` +
-    `• سفارش: ${statusLabel(order.orderStatus)}\n`;
+    `• سفارش: ${statusLabel(order.orderStatus)}\n` +
+    `• آخرین به‌روزرسانی: ${faTimeAgo(order.updatedAt)}`;
 
   if (order.notes) {
     msg +=
-      `\n━━━━━━━━━━━━━━━━━\n` +
+      `\n\n━━━━━━━━━━━━━━━━━\n` +
       `📝 <b>یادداشت مشتری:</b>\n${escapeHtml(order.notes)}\n`;
   }
 
@@ -477,6 +544,8 @@ export async function newOrderNotificationMessage(
 }
 
 // ── Payment confirmed notification ───────────────────────────────────
+// This is the admin's call-to-action: verify the bank transfer, then
+// tap "✅ تأیید پرداخت" to advance the order.
 export async function paymentConfirmedMessage(
   orderNumber: string
 ): Promise<string | null> {
@@ -506,7 +575,7 @@ export async function paymentConfirmedMessage(
     `\n💵 <b>مبلغ قابل واریز:</b> <b>${formatToman(order.finalAmount)}</b>\n` +
     `🔢 مبلغ یکتای پیگیری: <b>${formatNumber(order.uniqueAmount)} تومان</b>\n\n` +
     `⚠️ <b>اقدام لازم:</b>\n` +
-    `۱. وجه را در حساب بانکی بررسی کنید (به مبلغ یکتا توجه کنید).\n` +
+    `۱. وجه را در حساب بانکی بررسی کنید (مبلغ یکتا = <b>${formatNumber(order.uniqueAmount)} تومان</b>).\n` +
     `۲. در صورت تأیید واریز، روی «✅ تأیید پرداخت» بزنید.\n` +
     `۳. سفارش را برای آماده‌سازی برنامه‌ریزی کنید.`;
 
@@ -514,10 +583,12 @@ export async function paymentConfirmedMessage(
 }
 
 // ── Search ───────────────────────────────────────────────────────────
-// Smart search: accepts order number (with or without HN-), phone (Persian digits OK).
+// Smart search: accepts order number (with or without HN-), phone
+// (Persian digits OK), or customer name (partial match).
 export async function searchOrders(query: string): Promise<any[]> {
   const { orderNumber, phone } = normalizeSearchQuery(query);
 
+  // 1) Exact order number match
   if (orderNumber) {
     const exact = await db.order.findUnique({
       where: { orderNumber },
@@ -533,6 +604,7 @@ export async function searchOrders(query: string): Promise<any[]> {
     if (exact) return [exact];
   }
 
+  // 2) Phone contains match
   if (phone) {
     const byPhone = await db.order.findMany({
       where: { customerPhone: { contains: phone } },
@@ -550,8 +622,21 @@ export async function searchOrders(query: string): Promise<any[]> {
     if (byPhone.length > 0) return byPhone;
   }
 
-  // Last resort: try raw query as order number (maybe admin typed something unusual)
-  return [];
+  // 3) Customer name contains match (fallback)
+  const byName = await db.order.findMany({
+    where: { customerName: { contains: query.trim() } },
+    orderBy: { createdAt: "desc" },
+    take: 8,
+    select: {
+      orderNumber: true,
+      customerName: true,
+      customerPhone: true,
+      finalAmount: true,
+      orderStatus: true,
+      createdAt: true,
+    },
+  });
+  return byName;
 }
 
 export async function searchMessage(query: string): Promise<string> {
@@ -560,9 +645,10 @@ export async function searchMessage(query: string): Promise<string> {
     return (
       `🔍 <b>جستجو</b>\n\n` +
       `❌ نتیجه‌ای برای «${escapeHtml(query)}» یافت نشد.\n\n` +
-      `💡 می‌توانید وارد کنید:\n` +
+      `💡 می‌توانید جستجو کنید با:\n` +
       `• شماره سفارش: <code>12345</code> یا <code>HN-12345</code>\n` +
-      `• شماره تلفن: <code>09123456789</code>\n\n` +
+      `• شماره تلفن: <code>09123456789</code>\n` +
+      `• نام مشتری: <code>علی</code>\n\n` +
       `📝 ارقام فارسی هم پشتیبانی می‌شوند.`
     );
   }
