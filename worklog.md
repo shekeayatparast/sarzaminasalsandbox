@@ -797,3 +797,23 @@ USER DEPLOYMENT INSTRUCTIONS (provided to user):
 - For future updates: developer pushes changes → user runs `sudo bash /opt/sarzemine-asal/update.sh`
 - update.sh: backs up DB → git pull → conditional bun install (if package.json changed) → conditional prisma push (if schema changed) → next build → restart services → health check
 - Safety: build failure keeps old code running, rollback instructions shown
+
+---
+Task ID: deploy-rsync-fix
+Agent: main (orchestrator)
+Task: Fix setup.sh crash on Google Cloud Shell (rsync not installed)
+
+Work Log:
+- User ran setup.sh on Google Cloud Shell (Ubuntu 24.04) — failed at line 314 with "rsync: command not found"
+- Root cause: rsync is NOT pre-installed on fresh Ubuntu systems; setup.sh didn't include it in apt-get install
+- Fix applied to setup.sh:
+  1. Added `rsync` to the apt-get install list in Step 3 (line 234)
+  2. Added `cp -r` fallback for GitHub clone mode (line 299-305) in case rsync still missing after install
+  3. Added `find ... -print0 | xargs install -D` fallback for local copy mode (line 320-340) with same exclusion rules (no node_modules, .next, db/*.db, .env)
+- Rebasing: remote had a README.md edit (user removed contact info section via GitHub web UI) — rebased local commit on top
+- Pushed: commit 8e5f496 → GitHub main
+- Verified: bash -n setup.sh passes syntax; rsync now appears in apt-get install line; both fallbacks in place
+
+Stage Summary:
+- Fix deployed. User can now run `git pull && sudo bash setup.sh` on Cloud Shell (or any Ubuntu system without rsync) to complete installation.
+- Note: Google Cloud Shell is ephemeral — installed services won't persist after session ends. This was a test run; the user will deploy to a real server later.
