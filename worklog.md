@@ -686,3 +686,54 @@ Stage Summary:
 - The only issue found (monitor.sh duplicate logging) was a cosmetic bug in non-root test mode — fixed and tarball regenerated.
 - Sandbox env leak (global DATABASE_URL) caused test artifacts (order lookup mismatch) but does NOT affect production — documented in previous worklog entry.
 - Package is ready for user to download and deploy.
+
+---
+Task ID: deploy-github
+Agent: main (orchestrator)
+Task: Set up GitHub-based deployment workflow — push to GitHub, easy updates on server
+
+Work Log:
+- Created .gitignore for deploy folder (excludes node_modules, .next, .env, db files, logs)
+- Created update.sh (283 lines): git pull + conditional rebuild + restart + health check
+  Features:
+  - Pre-update backup of database (keeps last 10)
+  - Detects changed files (only runs bun install if package.json changed, etc.)
+  - If build fails, services keep running with old code (safe state)
+  - Rollback instructions shown if health check fails
+- Modified setup.sh to support TWO deployment modes:
+  1. GitHub mode (recommended): clones repo to /opt/sarzemine-asal, enables update.sh
+  2. Local mode: uses bundled project/ folder (no update.sh support)
+  - Auto-detects: env var GITHUB_REPO_URL > .github-repo file > prompt user > local files
+  - Installs git if missing
+  - Clones with --depth 1, then unshallow for full history
+  - Saves repo URL to .github-repo for future reference
+  - Copies update.sh to install dir alongside monitor.sh
+- Fixed project/.gitignore: had `.env*` pattern that excluded .env.example
+  Added `!.env.example` exception (template file is safe to commit — no secrets)
+- Recreated project/.env.example (was missing from folder)
+- Updated README.md with complete GitHub-based deployment workflow:
+  - Installation from GitHub (clone or curl setup.sh)
+  - Update procedure (sudo bash update.sh)
+  - Rollback procedure (git reset --hard)
+  - Workflow for developer (push) and user (update.sh)
+  - File structure on server
+  - Service management commands
+  - Troubleshooting guide
+- Initialized git repo in /home/z/my-project/deploy/
+- Made initial commit: 117 files, 16,765 insertions
+- Tested clone + pull workflow end-to-end with local bare repo simulation:
+  - Clone: ✓ (all 117 files present in clone)
+  - Commit + push: ✓
+  - Pull: ✓ (update applied correctly)
+- Regenerated tarball: 6.0MB, 138 entries (includes update.sh + .env.example)
+
+Stage Summary:
+- Complete GitHub-based deployment workflow ready.
+- User workflow:
+  1. User creates GitHub repo (or gives token to push)
+  2. I push the deploy folder to their GitHub repo
+  3. On server: `git clone <repo>` then `sudo bash setup.sh` (first time only)
+  4. For updates: I push changes to GitHub, user runs `sudo bash /opt/sarzemine-asal/update.sh`
+- update.sh is smart: only reinstalls deps if package.json changed, only runs prisma push if schema changed, always rebuilds site, always restarts services, always backs up DB first.
+- Safety features: DB backup before every update, build failure keeps old code running, rollback instructions provided.
+- Git repo at /home/z/my-project/deploy/ has initial commit ready to push to GitHub.

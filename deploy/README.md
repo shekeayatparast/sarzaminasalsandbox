@@ -14,26 +14,26 @@
 
 ---
 
-## نحوهٔ نصب
+## 🚀 نصب اولیه (از GitHub)
 
-### ۱. انتقال بسته به سرور
+### مرحلهٔ ۱: اجرای نصب‌کننده
 
-تمام فایل‌های این پوشه را به سرور خود منتقل کنید:
-
-```bash
-# با scp
-scp -r deploy/ user@your-server:/tmp/
-
-# یا با rsync
-rsync -avz deploy/ user@your-server:/tmp/sarzemine-deploy/
-```
-
-### ۲. اجرای نصب‌کننده
+روی سرور خود، فایل `setup.sh` را اجرا کنید:
 
 ```bash
-cd /tmp/sarzemine-deploy
+# روش ۱: اگر فقط setup.sh را دارید (از GitHub دانلود شده)
+curl -o setup.sh https://raw.githubusercontent.com/YOUR_USERNAME/sarzemine-asal/main/setup.sh
 sudo bash setup.sh
+# → از شما آدرس GitHub repo را می‌پرسد
+
+# روش ۲: اگر کل پوشه را کلون کرده‌اید
+git clone https://github.com/YOUR_USERNAME/sarzemine-asal.git
+cd sarzemine-asal
+sudo bash setup.sh
+# → به‌صورت خودکار از همان پوشه نصب می‌کند
 ```
+
+### مرحلهٔ ۲: پاسخ به سؤالات
 
 نصب‌کننده از شما می‌پرسد:
 - **توکن ربات تلگرام** (پیش‌فرض: توکن فعلی شما)
@@ -41,65 +41,90 @@ sudo bash setup.sh
 - **دامنه (اختیاری)** — اگر دامنه دارید وارد کنید تا SSL خودکار گرفته شود
 - **ایمیل برای Let's Encrypt** (فقط اگر دامنه وارد کنید)
 
-### ۳. پس از نصب
+### مرحلهٔ ۳: تأیید نهایی
 
-سایت در آدرس `https://your-domain.com` (یا `http://localhost:3000` اگر دامنه ندارید) در دسترس است.
-
-ربات تلگرام به‌طور خودکار شروع به کار می‌کند.
+نصب‌کننده به‌صورت خودکار:
+1. وابستگی‌های سیستمی (Bun, Caddy, git, ...) را نصب می‌کند
+2. پروژه را در `/opt/sarzemine-asal` قرار می‌دهد
+3. `.env` را با مقادیر شما می‌سازد
+4. `bun install` + `next build` + `prisma db:push` + `prisma seed` را اجرا می‌کند
+5. Caddy را با SSL خودکار پیکربندی می‌کند (اگر دامنه داده‌اید)
+6. سرویس‌های systemd را نصب و شروع می‌کند
+7. مانیتورینگ سلامت را فعال می‌کند
+8. وضعیت سلامت را تأیید می‌کند
 
 ---
 
-## ساختار بسته
+## 🔄 آپدیت کردن پروژه (بعد از تغییرات)
 
-```
-deploy/
-├── setup.sh                    # نصب‌کننده اصلی (اجرای خودکار)
-├── monitor.sh                  # اسکریپت مانیتورینگ سلامت
-├── README.md                   # این فایل
-├── project/                    # سورس کامل پروژه
-│   ├── src/                    # کد سایت (Next.js)
-│   ├── mini-services/
-│   │   └── telegram-bot/       # ربات تلگرام
-│   ├── prisma/                 # اسکیمای دیتابیس + seed
-│   ├── public/                 # تصاویر و فایل‌های استاتیک
-│   ├── package.json
-│   ├── next.config.ts
-│   └── .env.example
-├── systemd/                    # فایل‌های سرویس systemd
-│   ├── sarzemine-asal-site.service
-│   ├── sarzemine-asal-bot.service
-│   ├── sarzemine-asal-monitor.service
-│   └── sarzemine-asal-monitor.timer
-└── caddy/
-    └── Caddyfile.template      # قالب کانفیگ Caddy
+وقتی تغییراتی در پروژه ایجاد شد و به GitHub پوش شد، روی سرور اجرا کنید:
+
+```bash
+sudo bash /opt/sarzemine-asal/update.sh
 ```
 
+این اسکریپت به‌طور خودکار:
+1. **پشتیبان از دیتابیس** می‌گیرد (برای ایمنی)
+2. `git pull origin main` را اجرا می‌کند
+3. اگر `package.json` تغییر کرده باشد، `bun install` را اجرا می‌کند
+4. اگر `schema.prisma` تغییر کرده باشد، `prisma generate` + `db:push` را اجرا می‌کند
+5. `next build` را اجرا می‌کند
+6. سرویس‌ها را restart می‌کند
+7. سلامت را تأیید می‌کند
+
+**اگر build شکست بخوره:**
+- سرویس‌ها با کد قدیمی ادامه می‌دهند (حالت امن)
+- ارور را به شما نشان می‌دهد
+- پس از رفع مشکل، دوباره `update.sh` را اجرا کنید
+
+**اگر خواستید برگردید به نسخه قبلی:**
+```bash
+cd /opt/sarzemine-asal
+sudo -u sarzemine git log --oneline -5      # نشان می‌دهد کدام commit ها
+sudo -u sarzemine git reset --hard <HASH>    # برگشت به نسخه قبلی
+sudo bash update.sh                          # rebuild + restart
+```
+
 ---
 
-## امکانات نصب‌کننده
+## 📋 ساختار پروژه روی سرور
 
-✅ نصب خودکار Bun (runtime جاوااسکریپت)  
-✅ نصب خودکار Caddy (وب‌سرور با HTTPS خودکار)  
-✅ ساخت یوزر اختصاصی `sarzemine` برای امنیت  
-✅ کپی پروژه به `/opt/sarzemine-asal`  
-✅ نصب وابستگی‌ها + build سایت  
-✅ راه‌اندازی دیتابیس + seed محصولات  
-✅ کانفیگ Caddy با SSL رایگان Let's Encrypt (اگر دامنه دارید)  
-✅ سرویس‌های systemd (شروع خودکار هنگام بوت)  
-✅ مانیتورینگ سلامت هر ۵ دقیقه + هشدار تلگرام  
-✅ ری‌استارت خودکار در صورت کرش  
+```
+/opt/sarzemine-asal/
+├── .env                    # تنظیمات (build شده توسط setup.sh)
+├── .github-repo            # آدرس GitHub repo (برای update.sh)
+├── .git/                   # git history (برای update.sh)
+├── package.json
+├── next.config.ts
+├── prisma/
+│   ├── schema.prisma
+│   └── seed.ts
+├── src/                    # کد سایت
+├── public/                # تصاویر و فایل‌های استاتیک
+├── mini-services/
+│   └── telegram-bot/      # ربات تلگرام
+├── db/
+│   └── custom.db          # دیتابیس (SQLite)
+├── setup.sh               # نصب‌کننده (برای نصب مجدد)
+├── update.sh              # آپدیت‌کننده (استفاده روزمره)
+└── monitor.sh             # مانیتور سلامت (هر ۵ دقیقه)
+
+/var/log/sarzemine-asal/   # لاگ‌ها
+/var/backups/sarzemine-asal/ # پشتیبان‌های دیتابیس (قبل از هر آپدیت)
+```
 
 ---
 
-## مدیریت پس از نصب
+## 🔧 مدیریت سرویس‌ها
 
 ### وضعیت سرویس‌ها
 ```bash
-sudo systemctl status sarzemine-asal-site
-sudo systemctl status sarzemine-asal-bot
+systemctl status sarzemine-asal-site
+systemctl status sarzemine-asal-bot
+systemctl status sarzemine-asal-monitor.timer
 ```
 
-### ری‌استارت سرویس‌ها
+### Restart دستی
 ```bash
 sudo systemctl restart sarzemine-asal-site
 sudo systemctl restart sarzemine-asal-bot
@@ -108,90 +133,149 @@ sudo systemctl restart sarzemine-asal-bot
 ### مشاهدهٔ لاگ‌ها
 ```bash
 # لاگ سایت
-sudo journalctl -u sarzemine-asal-site -f
+journalctl -u sarzemine-asal-site -f
 
 # لاگ ربات
-sudo journalctl -u sarzemine-asal-bot -f
+journalctl -u sarzemine-asal-bot -f
 
-# لاگ مانیتورینگ
+# لاگ مانیتور
 tail -f /var/log/sarzemine-asal/monitor.log
 ```
 
-### تغییر تنظیمات (مثلاً توکن ربات)
-1. فایل `/opt/sarzemine-asal/.env` را ویرایش کنید:
-   ```bash
-   sudo nano /opt/sarzemine-asal/.env
-   ```
-2. ربات را ری‌استارت کنید:
-   ```bash
-   sudo systemctl restart sarzemine-asal-bot
-   ```
+---
+
+## 🌐 پیکربندی دامنه و HTTPS
+
+اگر هنگام نصب دامنه وارد کرده‌اید، Caddy به‌صورت خودکار:
+- گواهی SSL رایگان Let's Encrypt را می‌گیرد
+- آن را هر ۶۰ روز تمدید می‌کند
+- HTTP را به HTTPS هدایت می‌کند
+- پورت‌های ۸۰ و ۴۴۳ را مدیریت می‌کند
+
+برای تغییر دامنه بعد از نصب، فایل `/etc/caddy/Caddyfile` را ویرایش کنید:
+```bash
+sudo nano /etc/caddy/Caddyfile
+sudo systemctl restart caddy
+```
+
+اگر دامنه ندارید، سایت فقط از `http://localhost:3000` قابل دسترس است.
 
 ---
 
-## مانیتورینگ
+## 🔒 امنیت
 
-اسکریپت مانیتورینگ هر ۵ دقیقه چک می‌کند:
+- پورت‌های ۳۰۰۰ (سایت) و ۳۰۰۳ (ربات) فقط از localhost قابل دسترس هستند
+- فایروال (ufw) فقط SSH، HTTP و HTTPS را باز می‌گذارد
+- `.env` با دسترسی `600` محافظت می‌شود
+- کاربر اختصاصی `sarzemine` اجرای سرویس‌ها را برعهده دارد
+
+---
+
+## 📊 مانیتورینگ سلامت
+
+اسکریپت `monitor.sh` هر ۵ دقیقه اجرا می‌شود و بررسی می‌کند:
 - ✅ سایت (HTTP 200)
-- ✅ ربات (health endpoint + polling فعال)
+- ✅ ربات (health + polling)
 - ✅ سرویس‌های systemd
 - ✅ فضای دیسک
 - ✅ حافظه
 
-اگر مشکلی پیدا شود، **به‌طور خودکار به ادمین در تلگرام هشدار می‌دهد** (با ۱۵ دقیقه cooldown تا اسپم نشود).
+اگر مشکلی پیدا شود، پیام تلگرامی به ادمین ارسال می‌کند (با ۱۵ دقیقه cooldown تا اسپم نشود).
 
-اجدادی‌دن مانیتورینگ:
 ```bash
-sudo /opt/sarzemine-asal/monitor.sh
+# اجرای دستی مانیتور
+sudo bash /opt/sarzemine-asal/monitor.sh
+
+# مشاهدهٔ لاگ مانیتور
+tail -f /var/log/sarzemine-asal/monitor.log
 ```
 
 ---
 
-## پشتیبان‌گیری از دیتابیس
-
-```bash
-# بکاپ
-sudo cp /opt/sarzemine-asal/db/custom.db /backup/custom-$(date +%Y%m%d).db
-
-# بازگردانی
-sudo systemctl stop sarzemine-asal-site sarzemine-asal-bot
-sudo cp /backup/custom-20250101.db /opt/sarzemine-asal/db/custom.db
-sudo chown sarzemine:sarzemine /opt/sarzemine-asal/db/custom.db
-sudo systemctl start sarzemine-asal-site sarzemine-asal-bot
-```
-
----
-
-## عیب‌یابی
+## ❓ رفع مشکل
 
 ### سایت بالا نمی‌آید
 ```bash
-sudo journalctl -u sarzemine-asal-site -e --no-pager
+sudo systemctl status sarzemine-asal-site
+sudo journalctl -u sarzemine-asal-site -e --no-pager | tail -50
+curl -I http://localhost:3000
 ```
 
 ### ربات کار نمی‌کند
 ```bash
-sudo journalctl -u sarzemine-asal-bot -e --no-pager
+sudo systemctl status sarzemine-asal-bot
+sudo journalctl -u sarzemine-asal-bot -e --no-pager | tail -50
 curl http://localhost:3003/health
 ```
 
-### SSL کار نمی‌کند
+### update.sh خطا می‌دهد
 ```bash
-sudo journalctl -u caddy -e --no-pager
-sudo systemctl restart caddy
+# بررسی وضعیت git
+cd /opt/sarzemine-asal
+sudo -u sarzemine git status
+sudo -u sarzemine git log --oneline -5
+
+# اگر build شکست خورده، لاگ کامل را ببینید
+sudo -u sarzemine bash -c 'cd /opt/sarzemine-asal && /home/sarzemine/.bun/bin/bun run build'
 ```
 
-### دیتابیس قفل شده
+### دیتابیس مشکل دارد
 ```bash
-sudo systemctl restart sarzemine-asal-site sarzemine-asal-bot
+# پشتیبان‌گیری دستی
+cp /opt/sarzemine-asal/db/custom.db ~/backup-$(date +%F).db
+
+# بازگردانی از پشتیبان
+sudo systemctl stop sarzemine-asal-site sarzemine-asal-bot
+cp ~/backup-2026-08-16.db /opt/sarzemine-asal/db/custom.db
+sudo chown sarzemine:sarzemine /opt/sarzemine-asal/db/custom.db
+sudo systemctl start sarzemine-asal-site sarzemine-asal-bot
+```
+
+### پشتیبان‌گیری کامل
+```bash
+# دیتابیس + تنظیمات
+sudo tar czf ~/sarzemine-backup-$(date +%F).tar.gz \
+  /opt/sarzemine-asal/db/custom.db \
+  /opt/sarzemine-asal/.env \
+  /etc/caddy/Caddyfile
 ```
 
 ---
 
-## نصب مجدد (آپدیت)
+## 🔁 جریان کاری (Workflow) برای آپدیت
 
-برای آپدیت پروژه با نسخهٔ جدید، کافیست بستهٔ جدید را جایگزین کنید و دوباره `setup.sh` را اجرا کنید. تمام داده‌ها (محصولات، سفارشات) حفظ می‌شوند.
+### برای توسعه‌دهنده (شما):
+1. تغییرات لازم را در پروژه ایجاد کنید (اینجا)
+2. با هم تأیید کنید که تغییرات نهایی شد
+3. به GitHub پوش کنید
+4. به کاربر بگویید `sudo bash /opt/sarzemine-asal/update.sh` را اجرا کند
 
-```bash
-sudo bash setup.sh
-```
+### برای کاربر (روی سرور):
+1. وقتی اطلاع‌رسانی شد که آپدیت آماده است:
+2. `sudo bash /opt/sarzemine-asal/update.sh` را اجرا کنید
+3. صبر کنید تا اسکریپت تمام شود (۱-۲ دقیقه)
+4. تغییرات اعمال شد ✓
+
+این تمام آنچه که باید انجام دهید است. هیچ نیاز به دستکاری فایل‌ها نیست.
+
+---
+
+## 📞 اطلاعات تماس
+
+- ربات تلگرام: @MeowAboosBot
+- آیدی ادمین: ۵۲۰۷۶۵۳۱۰۴
+- تلفن: ۰۹۱۴۰۲۰۲۳۲۰
+- شهرکرد، چهارمحال و بختیاری
+
+---
+
+## 📝 فایل‌های مهم
+
+| فایل | توضیح |
+|------|--------|
+| `setup.sh` | نصب اولیه (یک بار اجرا) |
+| `update.sh` | آپدیت پروژه (بعد از هر تغییر) |
+| `monitor.sh` | مانیتور سلامت (هر ۵ دقیقه خودکار) |
+| `.env` | تنظیمات محیطی (دسترسی: 600) |
+| `.github-repo` | آدرس GitHub repo |
+| `db/custom.db` | دیتابیس SQLite (داده‌های سفارش‌ها) |

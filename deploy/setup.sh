@@ -38,6 +38,9 @@ PROJECT_SRC="$SCRIPT_DIR/project"
 DEFAULT_BOT_TOKEN="8902705780:AAFGE0CuGGvyXYDT2yQRHME6iKB4sdXG3pQ"
 DEFAULT_ADMIN_ID="5207653104"
 
+# Default GitHub repo (can be overridden with GITHUB_REPO_URL env var or via prompt)
+DEFAULT_GITHUB_REPO=""
+
 # ── Helpers ──────────────────────────────────────────────────────────
 info()  { echo -e "${BLUE}ℹ${NC}  $*"; }
 ok()    { echo -e "${GREEN}✓${NC}  $*"; }
@@ -77,12 +80,53 @@ if ! has apt-get; then
 fi
 ok "OS: $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || echo "Linux")"
 
-# Check that project source exists
-if [[ ! -d "$PROJECT_SRC" || ! -f "$PROJECT_SRC/package.json" ]]; then
-  die "Project source not found at: $PROJECT_SRC
-Make sure setup.sh is in the same folder as the 'project/' directory."
+# Check if git is installed (needed for GitHub-based deployment)
+if ! has git; then
+  info "Installing git..."
+  apt-get install -y -qq git >/dev/null 2>&1 || true
 fi
-ok "Project source found"
+
+# Two deployment modes:
+#   1. GitHub clone (recommended) — setup.sh clones the repo to /opt/sarzemine-asal
+#      This enables future updates via `update.sh` (git pull + rebuild)
+#   2. Local files — uses the project/ folder bundled with setup.sh
+#
+# We detect GitHub repo URL from: env var GITHUB_REPO_URL > interactive prompt > .github-repo file
+GITHUB_REPO="${GITHUB_REPO_URL:-$DEFAULT_GITHUB_REPO}"
+
+# Check if there's a .github-repo file with the URL saved from a previous run
+if [[ -z "$GITHUB_REPO" && -f "$SCRIPT_DIR/.github-repo" ]]; then
+  GITHUB_REPO=$(cat "$SCRIPT_DIR/.github-repo" 2>/dev/null || echo "")
+fi
+
+# If still no GitHub repo, check if local project/ exists
+if [[ -z "$GITHUB_REPO" && -d "$PROJECT_SRC" && -f "$PROJECT_SRC/package.json" ]]; then
+  # Local mode — use the bundled project/ folder
+  DEPLOY_MODE="local"
+  ok "Deployment mode: local files (bundled project/)"
+  warn "Note: Without GitHub, you won't be able to use update.sh for easy updates."
+  warn "      To enable GitHub-based updates later, see README.md."
+elif [[ -n "$GITHUB_REPO" ]]; then
+  DEPLOY_MODE="github"
+  ok "Deployment mode: GitHub clone"
+  info "Repo: $GITHUB_REPO"
+else
+  # No GitHub repo, no local project/ — need to ask the user
+  echo ""
+  echo -e "${BOLD}Deployment source not found.${NC}"
+  echo -e "  Option 1: Provide a GitHub repo URL for git-based deployment (recommended)."
+  echo -e "           This enables easy updates via update.sh."
+  echo -e "  Option 2: Place the project/ folder next to setup.sh and re-run."
+  echo ""
+  read -rp "$(echo -e "${CYAN} GitHub repo URL (or press Enter to cancel): ${NC}")" GITHUB_REPO_INPUT
+  if [[ -z "$GITHUB_REPO_INPUT" ]]; then
+    die "No deployment source provided. Cannot continue."
+  fi
+  GITHUB_REPO="$GITHUB_REPO_INPUT"
+  DEPLOY_MODE="github"
+  ok "Deployment mode: GitHub clone"
+  info "Repo: $GITHUB_REPO"
+fi
 
 # Check internet connectivity
 if ! curl -s --max-time 10 https://bun.sh >/dev/null 2>&1; then
@@ -204,31 +248,72 @@ if [[ -n "$DOMAIN" ]]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
-# STEP 4: Copy project files
+# STEP 4: Deploy project files (clone from GitHub OR copy local files)
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 4/8: Copying project files"
+step "Step 4/8: Deploying project files"
 
-info "Copying project to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
-# Use rsync for efficient, clean copy
-rsync -a --delete \
-  --exclude='node_modules' \
-  --exclude='.next' \
-  --exclude='db/*.db' \
-  --exclude='db/*.db-shm' \
-  --exclude='db/*.db-wal' \
-  --exclude='dev.log' \
-  --exclude='server.log' \
-  --exclude='.env' \
-  "$PROJECT_SRC/" "$INSTALL_DIR/"
+
+if [[ "$DEPLOY_MODE" == "github" ]]; then
+  # ── GitHub mode: clone the repo ──
+  if [[ -d "$INSTALL_DIR/.git" ]]; then
+    # Already cloned — update to latest
+    info "Repo already cloned at $INSTALL_DIR — updating to latest..."
+    sudo -u "$SERVICE_USER" -H bash -c "cd '$INSTALL_DIR' && git fetch origin && git pull origin main" 2>&1 | tail -5 || \
+      sudo -u "$SERVICE_USER" -H bash -c "cd '$INSTALL_DIR' && git pull origin master" 2>&1 | tail -5
+    ok "Repo updated to latest"
+  else
+    info "Cloning from GitHub: $GITHUB_REPO"
+    # Clone to a temp dir first, then move (avoids permission issues)
+    TMP_CLONE="/tmp/sarzemine-clone-$$"
+    git clone --depth 1 "$GITHUB_REPO" "$TMP_CLONE" 2>&1 | tail -5
+    if [[ ! -d "$TMP_CLONE" ]]; then
+      die "git clone failed. Check the repo URL and your server's access to GitHub."
+    fi
+    # Move cloned files to install dir (preserves any existing .env, db)
+    rsync -a "$TMP_CLONE/" "$INSTALL_DIR/"
+    rm -rf "$TMP_CLONE"
+    ok "Repo cloned successfully"
+
+    # Initialize git history (for future updates via update.sh)
+    # The clone was --depth 1 (shallow). Fetch full history for safety.
+    sudo -u "$SERVICE_USER" -H bash -c "cd '$INSTALL_DIR' && git fetch --unshallow 2>/dev/null || true"
+
+    # Save the repo URL for future reference
+    echo "$GITHUB_REPO" > "$INSTALL_DIR/.github-repo"
+    chmod 644 "$INSTALL_DIR/.github-repo"
+  fi
+else
+  # ── Local mode: copy the bundled project/ folder ──
+  info "Copying local project files to $INSTALL_DIR..."
+  rsync -a --delete \
+    --exclude='node_modules' \
+    --exclude='.next' \
+    --exclude='db/*.db' \
+    --exclude='db/*.db-shm' \
+    --exclude='db/*.db-wal' \
+    --exclude='dev.log' \
+    --exclude='server.log' \
+    --exclude='.env' \
+    "$PROJECT_SRC/" "$INSTALL_DIR/"
+  ok "Local project files copied"
+
+  warn "Local mode: update.sh will not work (no git history)."
+  warn "To switch to GitHub mode later, see README.md → 'Switching to GitHub deployment'."
+fi
 
 # Ensure db directory exists
 mkdir -p "$INSTALL_DIR/db"
-ok "Project copied"
+ok "Database directory ready"
 
-# Copy monitor.sh
+# Copy monitor.sh and update.sh (deployment scripts)
 cp "$SCRIPT_DIR/monitor.sh" "$INSTALL_DIR/monitor.sh"
 chmod +x "$INSTALL_DIR/monitor.sh"
+if [[ -f "$SCRIPT_DIR/update.sh" ]]; then
+  cp "$SCRIPT_DIR/update.sh" "$INSTALL_DIR/update.sh"
+  chmod +x "$INSTALL_DIR/update.sh"
+  ok "Update script installed (use: sudo bash /opt/sarzemine-asal/update.sh)"
+fi
 ok "Monitor script installed"
 
 # Set ownership
