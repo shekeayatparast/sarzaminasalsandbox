@@ -1142,3 +1142,45 @@ Stage Summary:
 - ✅ Pushed to GitHub at commit 04b81b9 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`
 - ✅ Default admin credentials: admin / admin12345 (user should change after first login)
 - ✅ 34 new files, ~3000 lines of new code, all lint-clean
+
+---
+Task ID: bugfix-post-login-redirect
+Agent: main (orchestrator)
+Task: Fix "login succeeds but user is not redirected to the panel" bug reported by user
+
+Work Log:
+- User reported: entered username "admin" + password "admin12345", received the success toast "ورود با موفقیت انجام شد" but was NOT redirected to /admin — stayed stuck on /admin/login.
+- First verified the password itself was correct (user had previously tried "admin1234" which is wrong — correct is "admin12345" with 5 digits). Confirmed via bcrypt.compare against the DB hash.
+- Inspected /admin/login/page.tsx and found the redirect pattern:
+    router.push("/admin");
+    router.refresh();
+  This same pattern was also present in /agent/login, /agent/register, and /agent/(panel)/orders/new.
+- Root cause: race condition between router.push() and router.refresh() in Next.js App Router.
+  • router.push() queues a client-side navigation (RSC fetch) to the new URL.
+  • router.refresh() immediately fires a refresh of the CURRENT route (still /admin/login).
+  • The refresh can win the race, leaving the user stuck on the login page even though the toast appeared.
+  • Server-side log confirmed this: after POST /api/auth/admin/login 200, we saw GET /admin 200 (the push) AND GET /admin/login 200 (the refresh of the old URL).
+- Fix: replaced the pattern with window.location.assign() which does a full-page navigation. This:
+  • Bypasses the client-side router entirely (no race condition).
+  • Guarantees the freshly-set session cookie (from the fetch Set-Cookie header) is sent with the next request.
+  • Reliably lands the user on the dashboard.
+- Applied the fix to all 4 affected files:
+  • src/app/admin/login/page.tsx
+  • src/app/agent/login/page.tsx (both branches: pendingApproval and normal)
+  • src/app/agent/register/page.tsx
+  • src/app/agent/(panel)/orders/new/page.tsx (after placing an order, redirect to /agent/orders)
+- Removed the now-unused `useRouter` import and `const router = useRouter()` from all 4 files to keep lint clean.
+- Lint: PASS (0 errors, 0 warnings).
+- Restarted dev server (was down after long idle), verified with agent-browser:
+  • Clear cookies → open /admin/login → fill admin/admin12345 → click login → URL changes to /admin, dashboard renders "سلام مدیر اصلی 👋", sidebar (داشبورد / مدیریت نمایندگان / سفارش‌ها / گزارش‌ها), recent orders table. ✓ No page errors.
+  • Clear cookies → open /agent/login → fill 09123456789/test1234 → click login → URL changes to /agent, dashboard renders with agent sidebar (داشبورد / سفارش جدید / تاریخچه سفارشات / پروفایل). ✓ No page errors.
+- Server log now shows the correct pattern: POST /api/auth/admin/login 200 → GET /admin 200 (single request, no more spurious GET /admin/login after the redirect).
+- Synced the 4 fixed files to /home/z/my-project/deploy/project/, committed (b116f95), and pushed to GitHub.
+
+Stage Summary:
+- ✅ Bug fixed: post-login redirect now reliably navigates to the dashboard.
+- ✅ Root cause identified and documented (router.push + router.refresh race condition).
+- ✅ Same fix applied to agent login, agent register, and post-order placement.
+- ✅ Lint clean, end-to-end verified with agent-browser for both admin and agent flows.
+- ✅ Pushed to GitHub at commit b116f95 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`.
+- Files modified: 4 (admin/login, agent/login, agent/register, agent/(panel)/orders/new)
