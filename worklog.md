@@ -1184,3 +1184,47 @@ Stage Summary:
 - ✅ Lint clean, end-to-end verified with agent-browser for both admin and agent flows.
 - ✅ Pushed to GitHub at commit b116f95 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`.
 - Files modified: 4 (admin/login, agent/login, agent/register, agent/(panel)/orders/new)
+
+---
+Task ID: bugfix-three-issues-track-logout-phone
+Agent: main (orchestrator)
+Task: Fix 3 bugs reported by user: (1) /track link 404s, (2) logout shows raw "true" text, (3) agent register rejects Persian-digit phones
+
+Work Log:
+- Issue 1: /track?orderNumber=HN-84535 returns 404
+  • Root cause: There was no /track page route. The track feature was a "view" inside the home page (Zustand nav store view==="track"). The admin/agent panels link to /track?orderNumber=X, but that URL didn't exist.
+  • Fix: Created src/app/track/page.tsx — standalone route that reads orderNumber & phone from the async searchParams (Next.js 16 requires awaiting), renders Header + Footer + TrackOrdersView with those as initial values.
+  • Modified src/components/site/TrackOrdersView.tsx: added optional initialOrderNumber/initialPhone props, useState initializers read from them, added autoSearchedRef + useEffect on mount that calls doSearch(false) once when initial values are present.
+  • Verified: GET /track?orderNumber=HN-84535 → 200, page renders, order number pre-filled in input, auto-search runs, toast "۱ سفارش یافت شد" appears, refresh button visible (results displayed). No console errors.
+
+- Issue 2: After logout, user sees a page that just says "true"
+  • Root cause: The sidebar/header logout buttons use plain HTML <form action="/api/auth/.../logout" method="POST">. The logout APIs returned NextResponse.json({success:true}) — the browser received the JSON body and displayed it as the page content (just "true" or {"success":true}).
+  • Fix: Changed both logout APIs (admin + agent) to return NextResponse.redirect(new URL("/admin/login" or "/agent/login", req.url), 303). HTTP 303 (See Other) is the standard PRG (Post/Redirect/Get) pattern — the browser follows it with a GET to the login page.
+  • Verified: Admin login → click "خروج از حساب" → URL changes to /admin/login, login page renders. Agent login → click "خروج از حساب" → URL changes to /agent/login, login page renders. No more raw "true" text.
+
+- Issue 3: Agent register rejects phone numbers entered with Persian keyboard
+  • Root cause: The client-side validate() function in src/app/agent/register/page.tsx used the regex /^09\d{9}$/ which only matches ASCII digits (0-9). Persian digits (۰-۹) and Arabic-Indic digits (٠-٩) failed. The backend (auth.ts) already had persianToEnglishDigits() to handle this, but the client form didn't use it.
+  • Fix: Moved the phone helpers (persianToEnglishDigits, normalizeIranPhone, isValidIranPhone) from src/lib/auth.ts to src/lib/format.ts (which is client-safe — no next/headers, no db imports). src/lib/auth.ts now re-exports them from format.ts so server code can still import from "@/lib/auth". The register page imports isValidIranPhone from "@/lib/format" and uses it in the client-side validate() function. Also fixed the nationalId validation to accept Persian digits.
+  • Verified the function with bun: isValidIranPhone("۰۹۱۲۳۴۵۶۷۸۹") → true (was false before). Also tested +98, 0098, with dashes/spaces — all valid.
+  • Verified end-to-end with agent-browser: Filled register form with Persian-digit phone "۰۹۱۲۳۴۵۶۷۸۹", selected province/city, clicked submit → client-side validation PASSED → POST /api/auth/agent/register reached the server (returned 409 because test agent 09123456789 already exists — this is the correct behavior, proving validation passed).
+
+- Lint: PASS (0 errors, 0 warnings). One initial warning about an unused eslint-disable directive in TrackOrdersView.tsx was fixed by removing the directive.
+
+- Synced all 7 modified/created files to /home/z/my-project/deploy/project/:
+  • src/app/track/page.tsx (NEW)
+  • src/components/site/TrackOrdersView.tsx (modified)
+  • src/app/api/auth/admin/logout/route.ts (modified)
+  • src/app/api/auth/agent/logout/route.ts (modified)
+  • src/lib/format.ts (modified — added phone helpers)
+  • src/lib/auth.ts (modified — re-export from format, removed duplicates)
+  • src/app/agent/register/page.tsx (modified — use isValidIranPhone)
+- Committed (2ccc563) and pushed to GitHub.
+
+Stage Summary:
+- ✅ /track page now works — deep links from admin/agent panels render the order detail with auto-search.
+- ✅ Logout now redirects to the login page (no more raw "true" text).
+- ✅ Persian-digit phones now pass client-side validation in the agent register form.
+- ✅ All 3 fixes verified end-to-end with agent-browser.
+- ✅ Lint clean.
+- ✅ Pushed to GitHub at commit 2ccc563 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`.
+- Files: 7 (1 new, 6 modified), 160 insertions, 37 deletions.
