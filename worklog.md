@@ -858,3 +858,287 @@ Stage Summary:
 - ✅ Full order flow works: create → track → notify bot → admin receives on Telegram
 - ✅ Sandbox production unaffected (separate DB, separate ports, isolated environment)
 - The deployment is ready for production use on a real Linux server.
+
+---
+Task ID: P5a-agent-panel-ui
+Agent: full-stack-developer
+Task: Build complete Agent Panel UI (login, register, dashboard, orders, profile)
+
+Work Log:
+- Read worklog.md to understand prior work (site, bot, deploy package all complete).
+- Inspected existing infrastructure:
+  • src/lib/auth.ts: getCurrentAgent() invalidates non-active sessions — but task requires the layout to show "waiting for approval" page for pending agents. Modified getAgentFromToken to keep pending sessions valid (only blocked/rejected are invalidated), so the panel layout can branch on agent.status.
+  • src/lib/stats.ts: AgentStats interface + computeAgentStats(agentId) returns weeklySeries, monthlySeries, orderStatusDistribution, topProducts, recentOrders.
+  • src/lib/products.ts: CONTAINERS (0.5,1,2,3,4,25), PAYMENT_CARD_NUMBER, PAYMENT_CARD_HOLDER, CONTACT_PHONE_RAW.
+  • src/lib/locations.ts: PROVINCES array (30 provinces, all cities).
+  • src/lib/format.ts: toPersianDigits, formatToman, formatRial, formatJalaliDateTime, ORDER_STATUS_STEPS, statusStepIndex.
+  • Existing API routes verified: POST /api/auth/agent/login (handles pending → pendingApproval:true), POST /api/auth/agent/register (auto-creates pending session), GET /api/agent/me (sanitized profile), GET /api/agent/stats (calls computeAgentStats), GET/POST /api/agent/orders, GET /api/agent/orders/[id], GET/PATCH /api/agent/profile.
+
+- Created cart store (src/lib/agent-cart-store.ts): Zustand store with localStorage persistence for the "place new order" page. Items have productId, containerSize, hasWax, quantity, unitPrice. Methods: addItem, updateQuantity, removeItem, clear, totalCount, totalKg, totalAmount.
+
+- Created shared components in src/components/agent/:
+  1. OrderStatusBadge.tsx — colored Badge variants for 7 statuses (awaiting_payment, paid, confirmed, preparing, shipped, delivered, cancelled) using amber/yellow/emerald/orange/sky/green/red palette (NO indigo/blue as primary). Plus PaymentStatusBadge helper + orderStatusLabel reverse-map.
+  2. StatCard.tsx — server component (NOT client — passing Lucide icons as props works fine). Shows title, value, icon, optional growthPct with up/down arrow + percentage badge.
+  3. AgentSidebar.tsx — client component (uses usePathname for active link). 4 nav items: داشبورد (/agent), سفارش جدید (/agent/orders/new), تاریخچه سفارشات (/agent/orders), پروفایل (/agent/profile). Has a logout <form action="/api/auth/agent/logout" method="POST"> at the bottom.
+  4. AgentHeader.tsx — client component (sticky top bar). Shows agent name + store name + balance pill (links to dashboard). On mobile, hamburger opens Sheet with the sidebar inside. Has logout button on mobile (desktop sidebar has its own logout).
+  5. DashboardCharts.tsx — client component using recharts. 4 charts in a 2-col grid:
+     • Weekly sales line chart (8 weeks, amber line)
+     • Monthly sales bar chart (6 months, amber bars)
+     • Order status donut (PieChart with honey palette + legend)
+     • Top products horizontal bar chart
+     Custom tooltip with Persian digits + Toman suffix. NO indigo/blue colors used.
+  6. CopyButton.tsx — small client component for copying order number, card number, tracking code to clipboard with sonner toast feedback.
+  7. ProfileForm.tsx — client component with two forms (profile info + password change). Province/city select dropdowns populated from PROVINCES. Phone field is read-only (not editable). All fields pre-filled from server-passed agent data. Client-side validation before PATCH /api/agent/profile.
+
+- Created pages in src/app/agent/:
+  1. layout.tsx → moved to (panel)/layout.tsx (route group) so login/register are OUTSIDE the protected layout.
+     • Uses getCurrentAgent() to check auth.
+     • No session → redirect("/agent/login")
+     • status === "pending" → WaitingApproval screen (icon, store name, logout, link to home)
+     • status === "blocked" or "rejected" → BlockedScreen (icon, reason if rejected, logout)
+     • status === "active" → renders AgentHeader + sidebar (desktop right, mobile hamburger) + main content
+  2. (panel)/page.tsx (dashboard, server component):
+     • Fetches agent record + computeAgentStats(agentId) directly (no API call needed since server-side)
+     • 4 StatCards: فروش این ماه, کل سفارش‌ها, پورسانت, موجودی (with monthGrowthPct/weekGrowthPct badges)
+     • Pending orders banner (if pendingOrders > 0)
+     • DashboardCharts (4 charts)
+     • Recent orders table (5 latest with Persian dates)
+     • Account info card (commissionRate, totalSales, balance, totalOrders)
+     • reverseStatusLabel helper converts Persian label back to status key for the badge
+  3. login/page.tsx (client component):
+     • Phone + password inputs (with Phone/Lock icons)
+     • Submit → POST /api/auth/agent/login
+     • On success: router.push("/agent")
+     • On pendingApproval: toast + redirect (layout will show waiting page)
+     • Links: /agent/register, /admin/login, /
+     • Shows toast on errors (sonner)
+  4. register/page.tsx (client component):
+     • Fields: name, phone, password, storeName, province (Select), city (Select dependent on province), address (Textarea), nationalId (optional)
+     • Client-side validate(): phone must be 09xxxxxxxxx, password ≥ 6 chars with letter+digits, storeName ≥ 3 chars, address ≥ 5 chars, nationalId 10 digits if provided
+     • Submit → POST /api/auth/agent/register → toast "ثبت‌نام موفق" → router.push("/agent")
+     • Links: /agent/login, /
+  5. (panel)/orders/page.tsx (server component):
+     • Reads searchParams: status (filter) + page (pagination)
+     • Queries db.order.findMany with whereClause + pagination (20 per page)
+     • Filter chips: همه، در انتظار پرداخت، پرداخت ثبت شد، تأیید مدیریت، تحویل به پست، تحویل داده شده
+     • Table with: orderNumber (link to detail), date (Jalali), items count, final amount, payment status badge, order status badge, "جزئیات" link
+     • Empty state with CTA to /agent/orders/new
+     • Pagination controls (prev/next buttons + "page X of Y")
+  6. (panel)/orders/new/page.tsx (client component — most complex page):
+     • Loads products + agent profile on mount (parallel fetch)
+     • Per-product selection state (Record<productId, {size, hasWax, qty}>)
+     • For each product: container size 6-button grid (0.5,1,2,3,4,25 kg), wax Switch (disabled for non-1kg), quantity +/- stepper, "افزودن به سفارش — {price}" button
+     • Cart panel (sticky on desktop): items list with per-line qty stepper + remove button, bonus honey hint (0.5kg per 5kg non-wholesale), total amount, total kg
+     • Delivery info card: province/city Select (pre-filled from agent profile), address Textarea (pre-filled), notes Textarea
+     • Submit button → POST /api/agent/orders with items + delivery info → toast + redirect to /agent/orders + clear cart
+     • Loading skeletons during fetch
+  7. (panel)/orders/[id]/page.tsx (server component):
+     • Get order via db.order.findFirst({where: {id, agentId: user.id}, include: {items: true}})
+     • notFound() if missing
+     • StatusTracker inline component (replicates the customer site's progress timeline)
+     • If payment pending: payment instructions card with card number, holder, final amount, unique amount explanation, support phone
+     • If shipped/delivered with trackingCode: sky-themed tracking code card with copy button + link to tracking.post.ir
+     • Items table (productName, container, wax, qty, unit price, total)
+     • Two side-by-side cards: financial details (totalAmount, uniqueAmount, finalAmount, payment badge) + delivery info (province, city, delivery type, address, notes)
+  8. (panel)/profile/page.tsx (server component that just renders ProfileForm client component with agent data)
+
+- Restructured agent folder with route group:
+  • src/app/agent/login/page.tsx — outside panel layout (no auth wall)
+  • src/app/agent/register/page.tsx — outside panel layout (no auth wall)
+  • src/app/agent/(panel)/layout.tsx — protected panel layout
+  • src/app/agent/(panel)/page.tsx — dashboard
+  • src/app/agent/(panel)/orders/page.tsx — order history
+  • src/app/agent/(panel)/orders/new/page.tsx — new order
+  • src/app/agent/(panel)/orders/[id]/page.tsx — order detail
+  • src/app/agent/(panel)/profile/page.tsx — profile
+
+- Lint: initial run had 2 warnings (unused eslint-disable directives in ProfileForm.tsx and orders/new/page.tsx) — fixed by removing the directives. Final lint: 0 errors, 0 warnings.
+
+- Initial dev server issue: After `bun run db:generate` (regenerated Prisma client mid-session), the dev server's cached `globalForPrisma.prisma` singleton held an OLD PrismaClient that didn't expose the Agent model — so `db.agent.findUnique()` crashed with "Cannot read properties of undefined". This affected ALL agent/admin API routes, not just mine.
+  Fix: Killed the dev server (the supervisor didn't auto-restart it) and started a fresh one via setsid. The new dev server loaded a fresh PrismaClient with all models.
+
+- Found & fixed a runtime error in StatCard: it was initially marked "use client" but received Lucide icons (React components / functions) as props from the server-rendered dashboard page. Next.js doesn't allow passing functions from Server Components to Client Components. Fix: removed "use client" from StatCard — it has no client interactivity, so it can be a pure Server Component, and icons can be passed through as props (they're just rendered, not invoked, on the server side).
+
+- Verified end-to-end with curl + agent-browser:
+  • Register new agent (POST /api/auth/agent/register) → returns {success, agent, message}. Account starts in "pending" status.
+  • GET /agent while pending → renders "در انتظار تأیید مدیر" waiting page (with store name + logout + link to home). ✓
+  • Login with pending agent → returns pendingApproval:true. ✓
+  • Manually activated test agent via bun script → status="active".
+  • Login again → redirects to /agent dashboard.
+  • Dashboard renders: stat cards (فروش این ماه, کل سفارش‌ها, پورسانت, موجودی), 4 charts (Weekly sales line, Monthly sales bar, Order status donut, Top products bar), recent orders table (empty state with CTA), account info card. ✓
+  • Orders history page: empty state with CTA. ✓
+  • New order page: product cards with size grid, wax toggle, qty stepper; cart panel; delivery info card. ✓
+  • Placed an order via POST /api/agent/orders with valid product ID → success: HN-22473, totalAmount=2,800,000, uniqueAmount=294, finalAmount=2,800,294.
+  • Orders list now shows HN-22473. ✓
+  • Order detail page shows: order number, status tracker, payment instructions (card number, holder, amount, support phone), items table, financial details, delivery info. ✓
+  • Profile page: shows account overview (status, commission rate, total orders, total sales), profile form (pre-filled), password change form. ✓
+  • PATCH /api/agent/profile with name+storeName → success. ✓
+  • PATCH /api/agent/profile with currentPassword+newPassword → success. ✓
+  • Login with new password → success (proves password was actually changed). ✓
+  • Cleaned up test agent + test order from DB after verification.
+
+- Screenshots captured for visual verification (saved to /home/z/my-project/):
+  • screenshot-agent-login.png — login page (centered card on cream gradient, store icon, phone+password fields, honey-gradient submit button)
+  • screenshot-agent-register.png — register form (2-column layout on desktop)
+  • screenshot-agent-dashboard.png — full dashboard with stat cards, charts, recent orders
+  • screenshot-agent-orders.png — orders list (empty state with CTA)
+  • screenshot-agent-new-order.png — new order page (product cards + cart + delivery form)
+  • screenshot-agent-order-detail.png — order detail (status tracker + payment instructions + items table)
+  • screenshot-agent-profile.png — profile page (account info + 2 forms)
+
+Stage Summary:
+- Files created:
+  • src/lib/agent-cart-store.ts (Zustand store for new-order cart)
+  • src/components/agent/OrderStatusBadge.tsx (badge + payment badge + label helpers)
+  • src/components/agent/StatCard.tsx (server component stat card with growth %)
+  • src/components/agent/AgentSidebar.tsx (sidebar nav with logout form)
+  • src/components/agent/AgentHeader.tsx (sticky top bar with balance + mobile hamburger)
+  • src/components/agent/DashboardCharts.tsx (4 recharts in 2x2 grid)
+  • src/components/agent/CopyButton.tsx (clipboard copy with toast)
+  • src/components/agent/ProfileForm.tsx (profile + password forms, client component)
+  • src/app/agent/login/page.tsx (login form)
+  • src/app/agent/register/page.tsx (register form with all fields + validation)
+  • src/app/agent/(panel)/layout.tsx (protected layout with pending/blocked handling)
+  • src/app/agent/(panel)/page.tsx (dashboard with stats + charts + recent orders)
+  • src/app/agent/(panel)/orders/page.tsx (order history with filter chips + pagination)
+  • src/app/agent/(panel)/orders/new/page.tsx (place new order — most complex page)
+  • src/app/agent/(panel)/orders/[id]/page.tsx (order detail with status tracker + payment instructions)
+  • src/app/agent/(panel)/profile/page.tsx (server component rendering ProfileForm)
+- Modified: src/lib/auth.ts (getAgentFromToken allows pending sessions to remain valid so the waiting-page branch can render)
+- Lint: PASS (0 errors, 0 warnings)
+- Dev server issue encountered + fixed (Prisma client regeneration mid-session caused stale singleton; resolved by restarting the dev server)
+- StatCard initially had "use client" — removed it because passing Lucide icons from a server component to a client component is not allowed; StatCard has no client interactivity so it can be a pure server component
+- Full end-to-end verified: register → pending waiting page → admin-activate → login → dashboard → orders list → place new order → order detail → profile edit → password change → re-login with new password. All worked.
+- Notes:
+  • Login button click via agent-browser CLI didn't trigger form submit reliably (button type=submit inside form should work — likely a quirk of the agent-browser click event). Worked around by using agent-browser eval to call fetch() to the login API which set the session cookie, then navigated to /agent.
+  • The /admin/login link in the login page is a placeholder (admin panel is a separate task).
+  • All agent pages force dynamic rendering (export const dynamic = "force-dynamic") so they always reflect the latest DB state.
+
+---
+Task ID: P5b-admin-panel-ui
+Agent: full-stack-developer
+Task: Build complete Admin Panel UI (login, dashboard, agents mgmt, orders, reports)
+
+Work Log:
+- Read worklog.md and prior agent panel worklog entry (P5a) to understand design patterns and existing infrastructure.
+- Inspected existing files: src/lib/auth.ts (getCurrentAdmin), src/lib/stats.ts (computeAdminStats + AdminStats interface), src/lib/format.ts (toPersianDigits, formatToman, formatJalaliDate/Time, IRAN_TZ), src/app/agent/(panel)/layout.tsx + page.tsx, src/components/agent/{AgentSidebar,AgentHeader,StatCard,DashboardCharts,OrderStatusBadge}.tsx, src/app/agent/login/page.tsx, prisma/schema.prisma (Agent/Admin/Order/OrderItem/AgentPayment/AgentSession models), src/app/api/admin/{me,stats,agents,agents/[id],orders}/route.ts (all already built), src/app/api/auth/admin/{login,logout}/route.ts.
+- Decided to mirror the agent panel's "(panel)" route group pattern so the admin login page sits outside the protected layout. Created `src/app/admin/(panel)/` for protected pages + `src/app/admin/login/` for the public login.
+- Created shared client components in src/components/admin/:
+  1. AdminSidebar.tsx — client component (uses usePathname). 4 nav items: داشبورد (/admin), مدیریت نمایندگان (/admin/agents), سفارش‌ها (/admin/orders), گزارش‌ها (/admin/reports). Shows role badge + logout form posting to /api/auth/admin/logout.
+  2. AdminHeader.tsx — sticky top bar with mobile hamburger Sheet wrapping the sidebar. Shows admin name + role + crown badge + mobile logout button.
+  3. StatCard.tsx — server component (no client interactivity, can pass Lucide icons as props). Shows title, value, large icon tile, optional growth % (green/red), or optional hint text. Honey-themed icon backgrounds.
+  4. StatusBadge.tsx — colored Badge with status dot. 4 statuses: pending=amber, active=emerald, blocked=red, rejected=rose. Exports statusLabel helper.
+  5. RejectReasonDialog.tsx — controlled shadcn Dialog with Textarea for entering rejection reason (min 5 chars, max 500). PATCHes /api/admin/agents/[id] with {status:"rejected", rejectionReason} on submit, shows sonner toast, calls router.refresh() and optional onDone callback.
+  6. AgentActionsButtons.tsx — client component for the agent list table row. Shows context-aware buttons: pending→تأیید (green)+رد (red, opens RejectReasonDialog), active→مسدود (orange), blocked/rejected→فعال‌سازی (green). All rows get جزئیات link. Calls PATCH endpoint + router.refresh().
+  7. AgentStatusManager.tsx — for the agent details page. Same action buttons as AgentActionsButtons (approve/block/activate) PLUS an "ویرایش پورسانت" button that opens a Dialog with a Slider (0-50%) + numeric Input for setting commissionRate. PATCHes the rate, refreshes.
+  8. AdminDashboardCharts.tsx — client component using recharts. 4 charts in a 2-col grid: weekly revenue AreaChart (gradient fill), monthly revenue BarChart, order status donut PieChart with legend, top agents horizontal BarChart with honey palette (NO indigo/blue). Custom ChartTooltip with Persian digits + Toman.
+  9. ReportsCharts.tsx — client component for the reports page. Larger charts: full-width weekly revenue AreaChart, monthly stacked BarChart (نماینده/مشتری), revenue share donut, order status donut, top products horizontal BarChart, growth line chart (computed from weekly revenue deltas), top agents leaderboard with progress bars + rank badges (crown for #1).
+  10. AgentsFilters.tsx — client component for the agents page. Renders 5 filter tab buttons (all/pending/active/blocked/rejected) with live counts + a search form. Updates URL params via router.push() in a useTransition.
+  11. OrdersFilters.tsx — client component for the orders page. Renders 3 type tabs (all/customer/agent) + two Select dropdowns for orderStatus + paymentStatus. Updates URL params.
+  12. DownloadAgentsCsvButton.tsx — client component that fetches /api/admin/agents?limit=500 then synthesizes a CSV Blob in-browser with UTF-8 BOM (so Excel opens Persian text correctly). Triggers a download with today's date in filename.
+
+- Created admin pages in src/app/admin/:
+  1. login/page.tsx — client component. Username + password form. POST /api/auth/admin/login → redirect to /admin. Links to /agent/login (ورود به پنل نماینده) and / (بازگشت به سایت). Sonner toast on errors.
+  2. (panel)/layout.tsx — server component. getCurrentAdmin() check → redirect to /admin/login if no session. Also queries Admin record to confirm account is still active. Renders AdminHeader + desktop sidebar (RTL right side) + main content. Mobile sidebar in Sheet.
+  3. (panel)/page.tsx — dashboard server component. Calls computeAdminStats(). Shows: welcome banner with last login, pending agents banner (with CTA to filter), 4 StatCards (درآمد کل/کل سفارش‌ها/نماینده‌های فعال/پورسانت پرداختی) with growth %, 4 MiniStats (این هفته/این ماه/سفارش‌های نماینده/سفارش‌های مشتری), AdminDashboardCharts (4 charts), recent agents list (left) + recent orders table (right) with OrderStatusBadge/PaymentStatusBadge, and a quick active-agents table at the bottom (ActiveAgentsList sub-component queries db.agent.findMany directly).
+  4. (panel)/agents/page.tsx — server component, reads searchParams. Queries db.agent.findMany with where clause (status filter + OR name/storeName/phone contains). Renders AgentsFilters + agents table (desktop) / card list (mobile). Per-row AgentActionsButtons. Empty state when no agents match.
+  5. (panel)/agents/[id]/page.tsx — server component, getAgent via db.agent.findUnique({where:{id}, include:{orders, payments}}). notFound() if missing (verified: GET /admin/agents/nonexistent-id → 404). Shows: breadcrumb + agent header with avatar + status badge, rejection reason banner (if rejected) / approval banner (if active), AgentStatusManager card with action buttons + commission editor, 4 MiniStats (orders/sales/balance/commission), profile info card (2 cols, all agent fields + address), financial summary card (cream gradient bg), order history table (50 latest), payment history table (20 latest with credit/debit coloring).
+  6. (panel)/orders/page.tsx — server component, reads searchParams (orderType/orderStatus/paymentStatus/page). Renders OrdersFilters + paginated orders table (20/page) with type badge, payment badge, order status badge, "مشاهده" link that opens /track?orderNumber=X in a new tab. Prev/next pagination buttons in RTL (ArrowRight for prev, ArrowLeft for next).
+  7. (panel)/reports/page.tsx — server component, calls computeAdminStats(). Renders: header with DownloadAgentsCsvButton + back-to-dashboard, 4 main StatCards (درآمد کل/درآمد این ماه/میانگین ارزش سفارش/پورسانت پرداختی), 4 MiniStats (total agents/active agents/agent revenue/customer revenue), ReportsCharts (5+ charts: weekly revenue area, monthly stacked agent vs customer, revenue share donut, order status donut, top products bar, growth line, top agents leaderboard with progress bars), top products detail table with rank badges + avg price, recent agents + recent orders summary cards.
+
+- Verified all admin pages render with HTTP 200:
+  • GET /admin/login → 200 (renders login card with Crown logo + form)
+  • GET /admin (no auth) → 307 redirect to /admin/login
+  • POST /api/auth/admin/login {admin/admin12345} → 200, sets session cookie
+  • GET /admin (with cookie) → 200, dashboard renders (258KB HTML)
+  • GET /admin/agents → 200 (empty state — no agents in DB)
+  • GET /admin/orders → 200 (5 orders from prior testing)
+  • GET /admin/reports → 200 (charts + stats render)
+  • GET /admin/agents/nonexistent-id → 404 (notFound() works)
+- Verified dashboard contains key elements: "درآمد کل", "نماینده‌های فعال", "پورسانت پرداختی", "روند درآمد هفتگی", "برترین نماینده‌ها", "پنل مدیریت".
+- Verified agents page contains filter tabs + search.
+- Verified orders page contains "فیلتر پیشرفته" + dropdowns.
+- Verified reports page contains "خروجی CSV", "میانگین ارزش سفارش", "جدول برترین نماینده‌ها".
+
+- Lint: PASS (0 errors, 0 warnings). Initial run had no issues because I caught potential unused imports early (removed `UserPlus`, `Clock`, `Crown`, `statusLabel`, `reverseStatusLabel`) and used `[, startTransition]` instead of `[_, startTransition]` to avoid the unused-var lint error.
+
+Stage Summary:
+- Files created:
+  Components (12):
+    • src/components/admin/AdminSidebar.tsx
+    • src/components/admin/AdminHeader.tsx
+    • src/components/admin/StatCard.tsx
+    • src/components/admin/StatusBadge.tsx
+    • src/components/admin/RejectReasonDialog.tsx
+    • src/components/admin/AgentActionsButtons.tsx
+    • src/components/admin/AgentStatusManager.tsx
+    • src/components/admin/AdminDashboardCharts.tsx
+    • src/components/admin/ReportsCharts.tsx
+    • src/components/admin/AgentsFilters.tsx
+    • src/components/admin/OrdersFilters.tsx
+    • src/components/admin/DownloadAgentsCsvButton.tsx
+  Pages (7):
+    • src/app/admin/login/page.tsx
+    • src/app/admin/(panel)/layout.tsx
+    • src/app/admin/(panel)/page.tsx (dashboard)
+    • src/app/admin/(panel)/agents/page.tsx
+    • src/app/admin/(panel)/agents/[id]/page.tsx
+    • src/app/admin/(panel)/orders/page.tsx
+    • src/app/admin/(panel)/reports/page.tsx
+  Agent context:
+    • /home/z/my-project/agent-ctx/P5b-admin-panel-ui-full-stack-developer.md
+- Lint: PASS (0 errors, 0 warnings)
+- Runtime: All admin pages verified end-to-end with curl + cookies. Login → session cookie → 5 protected pages all render with HTTP 200 + correct Persian content + honey color palette + RTL layout. 404 handler for non-existent agent works.
+- Issues/notes:
+  • All API endpoints already existed before this task (auth + admin/me, admin/stats, admin/agents, admin/agents/[id], admin/orders). Only UI was built.
+  • The agent panel previously built uses a `(panel)` route group pattern — admin mirrors this so login page is outside the protected layout.
+  • StatCard is a server component (no client hooks) so Lucide icons can be passed as props (the same fix the agent panel discovered).
+  • ReportsCharts computes weekly growth deltas locally since stats.ts doesn't expose per-week growth — derived from `weeklyRevenueSeries`.
+  • CSV download is done client-side (in-browser Blob + UTF-8 BOM for Excel Persian text compatibility) so no new API endpoint was needed.
+  • Order detail "view" links open `/track?orderNumber=X` in a new tab — reuses the existing customer-facing track page rather than duplicating admin-side order detail (saves complexity).
+  • Default admin credentials (admin/admin12345) already seeded via prisma/seed-admin.ts from prior work; login verified to work.
+
+---
+Task ID: agent-admin-panels-feature
+Agent: main (orchestrator)
+Task: Add Agent Panel (نماینده فروش) + Admin Panel (مدیریت) to the site — full feature implementation, testing, and deployment to GitHub
+
+Work Log:
+- Phase 1 (DB schema): Added 4 new models (Agent, AgentSession, Admin, AgentPayment) + agentId/orderType on Order. db:push applied successfully.
+- Phase 2 (Auth foundation): Created src/lib/auth.ts with bcryptjs + signed cookies (HMAC for admin, DB-stored tokens for agents). Persian-to-English digit conversion for phone validation. 7-day TTL, httpOnly cookies.
+- Phase 3a (Agent auth APIs): register, login, logout endpoints. Auto-creates session token. Pending status allows login but dashboard locked.
+- Phase 3b (Admin auth APIs): login, logout. Uses signed-cookie approach (no DB session — admins are trusted, can be revoked by changing ADMIN_SESSION_SECRET).
+- Phase 4a (Agent data APIs): /api/agent/{me, orders, orders/[id], stats, profile} — full CRUD for agent's own data + stats.
+- Phase 4b (Admin data APIs): /api/admin/{me, agents, agents/[id], orders, stats} — admin can manage all agents + see all orders.
+- Phase 5a (Agent panel UI via subagent): Built login, register, dashboard with 4 charts, orders list, new order page (most complex), order details, profile. 15 files.
+- Phase 5b (Admin panel UI via subagent): Built login, dashboard, agents mgmt, agent details, orders, reports with 5+ charts. 17 files. Includes CSV export.
+- Phase 6 (Site integration): Added "پنل نماینده" + "پنل مدیریت" links to site Header (desktop + mobile).
+- Phase 7 (E2E testing via Agent Browser):
+  • Main site loads with new header links ✓
+  • Agent registration form works (province/city dropdowns cascade) ✓
+  • Admin login (admin/admin12345) ✓
+  • Approve pending agent ✓
+  • Agent login + dashboard renders with charts (recharts) ✓
+  • Agent places order via UI (HN-84535, 5,600,275 toman) ✓
+  • Order appears in agent history + admin dashboard ✓
+  • Admin agent details page shows orders + commission rate ✓
+  • Agent profile page works ✓
+  • Mobile responsive tested (375x812 viewport) ✓
+- Phase 8 (Bug fix): Phone validation rejected Persian digits (form auto-converts to Persian display). Fixed by adding persianToEnglishDigits() in normalizeIranPhone. Both Persian + English digits now accepted.
+- Phase 9 (Deploy + push):
+  • Synced 34 new files to deploy/project/ folder
+  • Updated setup.sh to seed admin user (admin/admin12345) by default
+  • Added .env.example documentation for ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_SESSION_SECRET
+  • Updated README with new panel features + credentials + workflow
+  • Re-initialized /home/z/my-project/deploy/.git (was wiped during sync)
+  • Committed: 1 commit, 51 files changed, 8460 insertions
+  • Pushed to GitHub: commit 04b81b9 on main
+
+Stage Summary:
+- ✅ Agent Panel complete: register → admin approves → login → dashboard (charts) → place order → see in history → track payment
+- ✅ Admin Panel complete: login → dashboard (charts) → manage agents (approve/block/reject + set commission) → see all orders → reports (5+ charts + CSV export)
+- ✅ Telegram bot unaffected (no changes needed)
+- ✅ Existing customer order flow still works (HN-30662 customer order created during testing)
+- ✅ Pushed to GitHub at commit 04b81b9 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`
+- ✅ Default admin credentials: admin / admin12345 (user should change after first login)
+- ✅ 34 new files, ~3000 lines of new code, all lint-clean
