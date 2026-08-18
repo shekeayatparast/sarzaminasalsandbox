@@ -1,0 +1,678 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState, FormEvent } from "react";
+     4→import Link from "next/link";
+     5→import { Button } from "@/components/ui/button";
+     6→import { Input } from "@/components/ui/input";
+     7→import { Label } from "@/components/ui/label";
+     8→import { Textarea } from "@/components/ui/textarea";
+     9→import {
+    10→  Card,
+    11→  CardHeader,
+    12→  CardTitle,
+    13→  CardDescription,
+    14→  CardContent,
+    15→  CardFooter,
+    16→} from "@/components/ui/card";
+    17→import {
+    18→  Select,
+    19→  SelectContent,
+    20→  SelectItem,
+    21→  SelectTrigger,
+    22→  SelectValue,
+    23→} from "@/components/ui/select";
+    24→import { Switch } from "@/components/ui/switch";
+    25→import { Skeleton } from "@/components/ui/skeleton";
+    26→import { useAgentCart } from "@/lib/agent-cart-store";
+    27→import { CONTAINERS } from "@/lib/products";
+    28→import { PROVINCES } from "@/lib/locations";
+    29→import {
+    30→  containerPrice,
+    31→  formatToman,
+    32→  toPersianDigits,
+    33→} from "@/lib/format";
+    34→import { toast } from "sonner";
+    35→import {
+    36→  PackagePlus,
+    37→  Minus,
+    38→  Plus,
+    39→  Check,
+    40→  ShoppingBasket,
+    41→  Trash2,
+    42→  MapPin,
+    43→  Loader2,
+    44→  Send,
+    45→  ArrowLeft,
+    46→} from "lucide-react";
+    47→import { cn } from "@/lib/utils";
+    48→
+    49→interface Product {
+    50→  id: string;
+    51→  name: string;
+    52→  slug: string;
+    53→  pricePerKg: number;
+    54→  image: string | null;
+    55→}
+    56→
+    57→interface AgentProfile {
+    58→  province: string;
+    59→  city: string;
+    60→  address: string;
+    61→  storeName: string;
+    62→}
+    63→
+    64→export default function NewOrderPage() {
+    65→  const [products, setProducts] = useState<Product[]>([]);
+    66→  const [loadingProducts, setLoadingProducts] = useState(true);
+    67→  const [profile, setProfile] = useState<AgentProfile | null>(null);
+    68→  const [submitting, setSubmitting] = useState(false);
+    69→
+    70→  // Delivery info — pre-filled from agent profile
+    71→  const [province, setProvince] = useState("");
+    72→  const [city, setCity] = useState("");
+    73→  const [address, setAddress] = useState("");
+    74→  const [notes, setNotes] = useState("");
+    75→
+    76→  // Per-product selection state (productId → {size, hasWax, qty})
+    77→  const [selections, setSelections] = useState<
+    78→    Record<string, { size: number; hasWax: boolean; qty: number }>
+    79→  >({});
+    80→
+    81→  const items = useAgentCart((s) => s.items);
+    82→  const addItem = useAgentCart((s) => s.addItem);
+    83→  const updateQuantity = useAgentCart((s) => s.updateQuantity);
+    84→  const removeItem = useAgentCart((s) => s.removeItem);
+    85→  const clearCart = useAgentCart((s) => s.clear);
+    86→  const totalAmount = useAgentCart((s) => s.totalAmount());
+    87→  const totalKg = useAgentCart((s) => s.totalKg());
+    88→
+    89→  // Note: the 0.5kg bonus-per-5kg is a customer-only perk. Agents buy at
+    90→  // wholesale prices and do NOT receive the bonus — so we don't calculate
+    91→  // or display it here at all.
+    92→
+    93→  // Load products + profile on mount
+    94→  useEffect(() => {
+    95→    let mounted = true;
+    96→    (async () => {
+    97→      try {
+    98→        const [prodRes, profileRes] = await Promise.all([
+    99→          fetch("/api/products", { cache: "no-store" }),
+   100→          fetch("/api/agent/me", { cache: "no-store" }),
+   101→        ]);
+   102→        const prodData = await prodRes.json();
+   103→        const profileData = await profileRes.json();
+   104→        if (!mounted) return;
+   105→        if (Array.isArray(prodData.products)) {
+   106→          setProducts(prodData.products);
+   107→        }
+   108→        if (profileData.agent) {
+   109→          setProfile(profileData.agent);
+   110→          setProvince(profileData.agent.province || "");
+   111→          setAddress(profileData.agent.address || "");
+   112→          // NOTE: city is set in a separate useEffect below — setting it
+   113→          // here directly was being overridden by Radix Select's internal
+   114→          // item-resolution logic when the cities list updates.
+   115→        }
+   116→        // Initialize selections with defaults for each product
+   117→        if (Array.isArray(prodData.products)) {
+   118→          const init: Record<string, { size: number; hasWax: boolean; qty: number }> = {};
+   119→          for (const p of prodData.products) {
+   120→            init[p.id] = { size: 1, hasWax: false, qty: 1 };
+   121→          }
+   122→          setSelections(init);
+   123→        }
+   124→      } catch (err) {
+   125→        console.error("[agent/orders/new] load error:", err);
+   126→        toast.error("خطا در دریافت اطلاعات");
+   127→      } finally {
+   128→        if (mounted) setLoadingProducts(false);
+   129→      }
+   130→    })();
+   131→    return () => {
+   132→      mounted = false;
+   133→    };
+   134→  }, []);
+   135→
+   136→  const cities = PROVINCES.find((p) => p.name === province)?.cities || [];
+   137→
+   138→  // Reset city if user manually changes province — we use an explicit
+   139→  // onChange handler on the province Select (handleProvinceChange) instead
+   140→  // of a useEffect so that the initial profile-load (which sets province +
+   141→  // city together) doesn't trigger a spurious city-clear.
+   142→  // (The old useEffect approach had a race condition that wiped the
+   143→  // city loaded from the agent's profile.)
+   144→
+   145→  const handleProvinceChange = (newProvince: string) => {
+   146→    setProvince(newProvince);
+   147→    // When the USER picks a different province, the old city is no longer
+   148→    // valid — clear it so they pick a city from the new province's list.
+   149→    setCity("");
+   150→  };
+   151→
+   152→  // Initialize city from profile AFTER profile + cities are available.
+   153→  // Radix Select has an internal mechanism that resets the value to ""
+   154→  // when the items list changes (from [] to the city list). By setting
+   155→  // city in a separate effect that runs after the items are stable,
+   156→  // we avoid that reset. The `city` dep ensures this only runs once
+   157→  // (when city is still empty after profile loads).
+   158→  useEffect(() => {
+   159→    if (profile?.city && !city) {
+   160→      // Use a microtask delay to let Radix settle its items first
+   161→      const id = setTimeout(() => setCity(profile.city!), 0);
+   162→      return () => clearTimeout(id);
+   163→    }
+   164→  }, [profile, city]);
+   165→
+   166→  const handleSizeChange = (productId: string, newSize: number) => {
+   167→    setSelections((prev) => {
+   168→      const c = CONTAINERS.find((x) => x.size === newSize);
+   169→      const cur = prev[productId] || { size: 1, hasWax: false, qty: 1 };
+   170→      return {
+   171→        ...prev,
+   172→        [productId]: {
+   173→          ...cur,
+   174→          size: newSize,
+   175→          hasWax: c?.canWax ? cur.hasWax : false,
+   176→        },
+   177→      };
+   178→    });
+   179→  };
+   180→
+   181→  const handleQtyChange = (productId: string, delta: number) => {
+   182→    setSelections((prev) => {
+   183→      const cur = prev[productId] || { size: 1, hasWax: false, qty: 1 };
+   184→      return {
+   185→        ...prev,
+   186→        [productId]: {
+   187→          ...cur,
+   188→          qty: Math.max(1, Math.min(99, cur.qty + delta)),
+   189→        },
+   190→      };
+   191→    });
+   192→  };
+   193→
+   194→  const handleWaxChange = (productId: string, checked: boolean) => {
+   195→    setSelections((prev) => {
+   196→      const cur = prev[productId] || { size: 1, hasWax: false, qty: 1 };
+   197→      return { ...prev, [productId]: { ...cur, hasWax: checked } };
+   198→    });
+   199→  };
+   200→
+   201→  const handleAddToCart = (product: Product) => {
+   202→    const sel = selections[product.id] || { size: 1, hasWax: false, qty: 1 };
+   203→    const container = CONTAINERS.find((c) => c.size === sel.size) ?? CONTAINERS[1];
+   204→    const unitPrice = containerPrice(product.pricePerKg, sel.size);
+   205→    addItem({
+   206→      productId: product.id,
+   207→      productName: product.name,
+   208→      productImage: product.image,
+   209→      pricePerKg: product.pricePerKg,
+   210→      containerSize: sel.size,
+   211→      containerLabel: container.label,
+   212→      hasWax: container.canWax ? sel.hasWax : false,
+   213→      isWholesale: container.isWholesale,
+   214→      quantity: sel.qty,
+   215→      unitPrice,
+   216→    });
+   217→    toast.success(`${product.name} به سفارش اضافه شد`, {
+   218→      description: `${toPersianDigits(sel.qty)} عدد × ظرف ${toPersianDigits(sel.size)} کیلو`,
+   219→    });
+   220→  };
+   221→
+   222→  const handleSubmit = async (e: FormEvent) => {
+   223→    e.preventDefault();
+   224→    if (submitting) return;
+   225→
+   226→    if (items.length === 0) {
+   227→      toast.error("سبد سفارش خالی است. حداقل یک محصول اضافه کنید.");
+   228→      return;
+   229→    }
+   230→    if (!province) {
+   231→      toast.error("استان را انتخاب کنید");
+   232→      return;
+   233→    }
+   234→    if (!city) {
+   235→      toast.error("شهر را انتخاب کنید");
+   236→      return;
+   237→    }
+   238→    if (address.trim().length < 5) {
+   239→      toast.error("آدرس کامل را وارد کنید");
+   240→      return;
+   241→    }
+   242→
+   243→    setSubmitting(true);
+   244→    try {
+   245→      const res = await fetch("/api/agent/orders", {
+   246→        method: "POST",
+   247→        headers: { "Content-Type": "application/json" },
+   248→        body: JSON.stringify({
+   249→          province,
+   250→          city,
+   251→          address: address.trim(),
+   252→          notes: notes.trim() || undefined,
+   253→          items: items.map((i) => ({
+   254→            productId: i.productId,
+   255→            containerSize: i.containerSize,
+   256→            hasWax: i.hasWax,
+   257→            quantity: i.quantity,
+   258→          })),
+   259→        }),
+   260→      });
+   261→      const data = await res.json();
+   262→      if (!res.ok) {
+   263→        toast.error(data.error || "ثبت سفارش ناموفق بود");
+   264→        return;
+   265→      }
+   266→      toast.success("سفارش شما با موفقیت ثبت شد!", {
+   267→        description: `شماره سفارش: ${data.order.orderNumber}`,
+   268→      });
+   269→      clearCart();
+   270→      // Full-page navigation: the order list page must show the new order.
+   271→      window.location.assign("/agent/orders");
+   272→    } catch (err) {
+   273→      console.error("[agent/orders/new] submit error:", err);
+   274→      toast.error("خطای شبکه. لطفاً دوباره تلاش کنید.");
+   275→    } finally {
+   276→      setSubmitting(false);
+   277→    }
+   278→  };
+   279→
+   280→  return (
+   281→    <div className="space-y-5" dir="rtl">
+   282→      {/* Header */}
+   283→      <div className="flex flex-wrap items-center justify-between gap-3">
+   284→        <div>
+   285→          <h1 className="text-2xl font-extrabold text-honey-dark flex items-center gap-2">
+   286→            <PackagePlus className="w-6 h-6" />
+   287→            ثبت سفارش جدید
+   288→          </h1>
+   289→          <p className="text-sm text-muted-foreground mt-1">
+   290→            محصول مورد نظر را انتخاب کرده و به سفارش اضافه کنید
+   291→          </p>
+   292→        </div>
+   293→        <Button asChild variant="ghost" size="sm">
+   294→          <Link href="/agent/orders">
+   295→            <ArrowLeft className="w-4 h-4 ml-1" />
+   296→            بازگشت به سفارش‌ها
+   297→          </Link>
+   298→        </Button>
+   299→      </div>
+   300→
+   301→      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+   302→        {/* Products list (left/main) */}
+   303→        <div className="lg:col-span-2 space-y-4">
+   304→          {loadingProducts ? (
+   305→            <Card className="p-5 gap-3">
+   306→              <Skeleton className="h-6 w-40" />
+   307→              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   308→                {[1, 2, 3].map((i) => (
+   309→                  <Skeleton key={i} className="h-48 w-full" />
+   310→                ))}
+   311→              </div>
+   312→            </Card>
+   313→          ) : products.length === 0 ? (
+   314→            <Card className="p-8 text-center text-muted-foreground">
+   315→              محصولی برای سفارش وجود ندارد.
+   316→            </Card>
+   317→          ) : (
+   318→            products.map((product) => {
+   319→              const sel = selections[product.id] || {
+   320→                size: 1,
+   321→                hasWax: false,
+   322→                qty: 1,
+   323→              };
+   324→              const container =
+   325→                CONTAINERS.find((c) => c.size === sel.size) ?? CONTAINERS[1];
+   326→              const unitPrice = containerPrice(
+   327→                product.pricePerKg,
+   328→                sel.size
+   329→              );
+   330→              const total = unitPrice * sel.qty;
+   331→              return (
+   332→                <Card key={product.id} className="p-4 sm:p-5 gap-4">
+   333→                  {/* Product header */}
+   334→                  <div className="flex items-start gap-3">
+   335→                    {product.image && (
+   336→                      <img
+   337→                        src={product.image}
+   338→                        alt={product.name}
+   339→                        className="w-14 h-14 rounded-xl object-cover shrink-0"
+   340→                      />
+   341→                    )}
+   342→                    <div className="flex-1 min-w-0">
+   343→                      <h3 className="font-bold text-base text-foreground">
+   344→                        {product.name}
+   345→                      </h3>
+   346→                      <p className="text-xs text-muted-foreground mt-0.5">
+   347→                        قیمت هر کیلو: {formatToman(product.pricePerKg)}
+   348→                      </p>
+   349→                    </div>
+   350→                  </div>
+   351→
+   352→                  {/* Container size grid */}
+   353→                  <div>
+   354→                    <Label className="text-xs font-bold mb-2 block">
+   355→                      انتخاب ظرف
+   356→                    </Label>
+   357→                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+   358→                      {CONTAINERS.map((c) => (
+   359→                        <button
+   360→                          key={c.size}
+   361→                          type="button"
+   362→                          onClick={() => handleSizeChange(product.id, c.size)}
+   363→                          className={cn(
+   364→                            "relative px-2 py-2 rounded-lg border-2 text-xs font-medium transition-all text-center",
+   365→                            sel.size === c.size
+   366→                              ? "border-honey bg-accent text-accent-foreground shadow-sm"
+   367→                              : "border-border bg-card hover:border-honey/40"
+   368→                          )}
+   369→                        >
+   370→                          {sel.size === c.size && (
+   371→                            <Check className="absolute top-1 left-1 w-3 h-3 text-honey" />
+   372→                          )}
+   373→                          <div className="font-bold">
+   374→                            {toPersianDigits(c.size)}
+   375→                          </div>
+   376→                          <div className="text-[10px] text-muted-foreground">
+   377→                            {c.isWholesale ? "عمده" : "کیلو"}
+   378→                          </div>
+   379→                        </button>
+   380→                      ))}
+   381→                    </div>
+   382→                  </div>
+   383→
+   384→                  {/* Wax option */}
+   385→                  <div
+   386→                    className={cn(
+   387→                      "rounded-lg border p-2.5",
+   388→                      container.canWax
+   389→                        ? "border-honey/40 bg-accent/30"
+   390→                        : "border-border bg-muted/40 opacity-60"
+   391→                    )}
+   392→                  >
+   393→                    <div className="flex items-center justify-between gap-2">
+   394→                      <Label
+   395→                        htmlFor={`wax-${product.id}`}
+   396→                        className="text-xs font-bold cursor-pointer"
+   397→                      >
+   398→                        با موم عسل
+   399→                      </Label>
+   400→                      <Switch
+   401→                        id={`wax-${product.id}`}
+   402→                        checked={sel.hasWax}
+   403→                        onCheckedChange={(v) =>
+   404→                          handleWaxChange(product.id, v)
+   405→                        }
+   406→                        disabled={!container.canWax}
+   407→                      />
+   408→                    </div>
+   409→                  </div>
+   410→
+   411→                  {/* Quantity */}
+   412→                  <div className="flex items-center justify-between gap-2">
+   413→                    <Label className="text-xs font-bold">تعداد</Label>
+   414→                    <div className="flex items-center gap-1.5 bg-muted rounded-lg p-1">
+   415→                      <Button
+   416→                        type="button"
+   417→                        variant="ghost"
+   418→                        size="icon"
+   419→                        className="w-8 h-8 rounded-md hover:bg-background"
+   420→                        onClick={() => handleQtyChange(product.id, -1)}
+   421→                        disabled={sel.qty <= 1}
+   422→                      >
+   423→                        <Minus className="w-3.5 h-3.5" />
+   424→                      </Button>
+   425→                      <span className="w-8 text-center font-bold text-sm">
+   426→                        {toPersianDigits(sel.qty)}
+   427→                      </span>
+   428→                      <Button
+   429→                        type="button"
+   430→                        variant="ghost"
+   431→                        size="icon"
+   432→                        className="w-8 h-8 rounded-md hover:bg-background"
+   433→                        onClick={() => handleQtyChange(product.id, 1)}
+   434→                      >
+   435→                        <Plus className="w-3.5 h-3.5" />
+   436→                      </Button>
+   437→                    </div>
+   438→                  </div>
+   439→
+   440→                  {/* Add to cart */}
+   441→                  <Button
+   442→                    type="button"
+   443→                    onClick={() => handleAddToCart(product)}
+   444→                    className="w-full bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-sm h-10"
+   445→                  >
+   446→                    <ShoppingBasket className="w-4 h-4 ml-1.5" />
+   447→                    افزودن به سفارش — {formatToman(total)}
+   448→                  </Button>
+   449→                </Card>
+   450→              );
+   451→            })
+   452→          )}
+   453→        </div>
+   454→
+   455→        {/* Cart + delivery (sticky) */}
+   456→        <div className="lg:col-span-1">
+   457→          <form onSubmit={handleSubmit} className="space-y-4 lg:sticky lg:top-24">
+   458→            {/* Cart */}
+   459→            <Card className="p-4 gap-3">
+   460→              <CardHeader className="px-0">
+   461→                <CardTitle className="text-base flex items-center gap-2">
+   462→                  <ShoppingBasket className="w-5 h-5 text-honey-dark" />
+   463→                  خلاصه سفارش
+   464→                </CardTitle>
+   465→                <CardDescription className="text-xs">
+   466→                  {items.length === 0
+   467→                    ? "سبد خالی است"
+   468→                    : `${toPersianDigits(items.length)} نوع کالا`}
+   469→                </CardDescription>
+   470→              </CardHeader>
+   471→              <CardContent className="px-0 space-y-2">
+   472→                {items.length === 0 ? (
+   473→                  <div className="text-center py-8 text-sm text-muted-foreground">
+   474→                    <ShoppingBasket className="w-8 h-8 mx-auto mb-2 opacity-50" />
+   475→                    هنوز کالایی اضافه نکرده‌اید
+   476→                  </div>
+   477→                ) : (
+   478→                  <>
+   479→                    {items.map((i) => (
+   480→                      <div
+   481→                        key={i.id}
+   482→                        className="rounded-lg bg-muted/40 p-2.5 text-sm"
+   483→                      >
+   484→                        <div className="flex items-start justify-between gap-2">
+   485→                          <div className="flex-1 min-w-0">
+   486→                            <p className="font-bold truncate">
+   487→                              {i.productName}
+   488→                            </p>
+   489→                            <p className="text-xs text-muted-foreground">
+   490→                              {i.containerLabel}
+   491→                              {i.hasWax ? " + موم" : ""} ×{" "}
+   492→                              {toPersianDigits(i.quantity)} عدد
+   493→                            </p>
+   494→                          </div>
+   495→                          <div className="text-left shrink-0">
+   496→                            <p className="font-bold text-honey-dark">
+   497→                              {formatToman(i.unitPrice * i.quantity)}
+   498→                            </p>
+   499→                          </div>
+   500→                        </div>
+   501→                        <div className="flex items-center justify-between mt-2">
+   502→                          <div className="flex items-center gap-1">
+   503→                            <Button
+   504→                              type="button"
+   505→                              variant="ghost"
+   506→                              size="icon"
+   507→                              className="w-7 h-7 rounded"
+   508→                              onClick={() =>
+   509→                                updateQuantity(i.id, i.quantity - 1)
+   510→                              }
+   511→                              disabled={i.quantity <= 1}
+   512→                            >
+   513→                              <Minus className="w-3 h-3" />
+   514→                            </Button>
+   515→                            <span className="w-6 text-center text-xs font-bold">
+   516→                              {toPersianDigits(i.quantity)}
+   517→                            </span>
+   518→                            <Button
+   519→                              type="button"
+   520→                              variant="ghost"
+   521→                              size="icon"
+   522→                              className="w-7 h-7 rounded"
+   523→                              onClick={() =>
+   524→                                updateQuantity(i.id, i.quantity + 1)
+   525→                              }
+   526→                            >
+   527→                              <Plus className="w-3 h-3" />
+   528→                            </Button>
+   529→                          </div>
+   530→                          <Button
+   531→                            type="button"
+   532→                            variant="ghost"
+   533→                            size="icon"
+   534→                            className="w-7 h-7 rounded text-red-600 hover:bg-red-50"
+   535→                            onClick={() => removeItem(i.id)}
+   536→                            aria-label="حذف"
+   537→                          >
+   538→                            <Trash2 className="w-3.5 h-3.5" />
+   539→                          </Button>
+   540→                        </div>
+   541→                      </div>
+   542→                    ))}
+   543→
+   544→                    {/* Note: the 0.5kg bonus honey per 5kg is a CUSTOMER-only
+   545→                        perk. Agents do not receive it — they buy at wholesale
+   546→                        prices, so the bonus hint is intentionally NOT shown
+   547→                        here. */}
+   548→
+   549→                    <div className="h-px bg-border my-1" />
+   550→                    <div className="flex justify-between items-center font-bold">
+   551→                      <span>مبلغ کل:</span>
+   552→                      <span className="text-lg text-honey-dark">
+   553→                        {formatToman(totalAmount)}
+   554→                      </span>
+   555→                    </div>
+   556→                    <p className="text-[11px] text-muted-foreground">
+   557→                      مجموع: {toPersianDigits(totalKg)} کیلو عسل
+   558→                    </p>
+   559→                  </>
+   560→                )}
+   561→              </CardContent>
+   562→            </Card>
+   563→
+   564→            {/* Delivery info */}
+   565→            <Card className="p-4 gap-3">
+   566→              <CardHeader className="px-0">
+   567→                <CardTitle className="text-base flex items-center gap-2">
+   568→                  <MapPin className="w-5 h-5 text-honey-dark" />
+   569→                  اطلاعات تحویل
+   570→                </CardTitle>
+   571→                <CardDescription className="text-xs">
+   572→                  از پروفایل شما پر شده است
+   573→                </CardDescription>
+   574→              </CardHeader>
+   575→              <CardContent className="px-0 space-y-3">
+   576→                <div className="grid grid-cols-2 gap-2">
+   577→                  <div className="space-y-1.5">
+   578→                    <Label className="text-xs font-bold">استان</Label>
+   579→                    <Select
+   580→                      value={province}
+   581→                      onValueChange={handleProvinceChange}
+   582→                      disabled={submitting}
+   583→                    >
+   584→                      <SelectTrigger className="w-full h-9 text-sm">
+   585→                        <SelectValue placeholder="انتخاب" />
+   586→                      </SelectTrigger>
+   587→                      <SelectContent>
+   588→                        {PROVINCES.map((p) => (
+   589→                          <SelectItem key={p.name} value={p.name}>
+   590→                            {p.name}
+   591→                          </SelectItem>
+   592→                        ))}
+   593→                      </SelectContent>
+   594→                    </Select>
+   595→                  </div>
+   596→                  <div className="space-y-1.5">
+   597→                    <Label className="text-xs font-bold">شهر</Label>
+   598→                    <Select
+   599→                      value={city}
+   600→                      onValueChange={(v) => setCity(v)}
+   601→                      disabled={submitting || !province}
+   602→                    >
+   603→                      <SelectTrigger className="w-full h-9 text-sm">
+   604→                        {/* Radix Select can't resolve value→label when items
+   605→                            are rendered after the value is set (lazy content).
+   606→                            Render the selected city text ourselves when set,
+   607→                            falling back to SelectValue placeholder otherwise. */}
+   608→                        {city ? (
+   609→                          <span className="truncate">{city}</span>
+   610→                        ) : (
+   611→                          <SelectValue placeholder="انتخاب" />
+   612→                        )}
+   613→                      </SelectTrigger>
+   614→                      <SelectContent>
+   615→                        {cities.map((c) => (
+   616→                          <SelectItem key={c} value={c}>
+   617→                            {c}
+   618→                          </SelectItem>
+   619→                        ))}
+   620→                      </SelectContent>
+   621→                    </Select>
+   622→                  </div>
+   623→                </div>
+   624→                <div className="space-y-1.5">
+   625→                  <Label htmlFor="address" className="text-xs font-bold">
+   626→                    آدرس کامل
+   627→                  </Label>
+   628→                  <Textarea
+   629→                    id="address"
+   630→                    rows={3}
+   631→                    placeholder="استان، شهر، خیابان، کوچه، پلاک..."
+   632→                    value={address}
+   633→                    onChange={(e) => setAddress(e.target.value)}
+   634→                    disabled={submitting}
+   635→                    maxLength={500}
+   636→                    className="text-sm"
+   637→                  />
+   638→                </div>
+   639→                <div className="space-y-1.5">
+   640→                  <Label htmlFor="notes" className="text-xs font-bold">
+   641→                    یادداشت (اختیاری)
+   642→                  </Label>
+   643→                  <Textarea
+   644→                    id="notes"
+   645→                    rows={2}
+   646→                    placeholder="یادداشت برای فروشنده..."
+   647→                    value={notes}
+   648→                    onChange={(e) => setNotes(e.target.value)}
+   649→                    disabled={submitting}
+   650→                    maxLength={500}
+   651→                    className="text-sm"
+   652→                  />
+   653→                </div>
+   654→              </CardContent>
+   655→            </Card>
+   656→
+   657→            {/* Submit */}
+   658→            <Button
+   659→              type="submit"
+   660→              disabled={submitting || items.length === 0}
+   661→              className="w-full bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-md h-12 text-base"
+   662→            >
+   663→              {submitting ? (
+   664→                <Loader2 className="w-5 h-5 animate-spin" />
+   665→              ) : (
+   666→                <Send className="w-5 h-5" />
+   667→              )}
+   668→              {submitting
+   669→                ? "در حال ثبت سفارش..."
+   670→                : `ثبت سفارش — ${formatToman(totalAmount)}`}
+   671→            </Button>
+   672→          </form>
+   673→        </div>
+   674→      </div>
+   675→    </div>
+   676→  );
+   677→}
+   678→

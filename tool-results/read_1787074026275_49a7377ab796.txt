@@ -1,0 +1,501 @@
+   800→
+   801→---
+   802→Task ID: deploy-rsync-fix
+   803→Agent: main (orchestrator)
+   804→Task: Fix setup.sh crash on Google Cloud Shell (rsync not installed)
+   805→
+   806→Work Log:
+   807→- User ran setup.sh on Google Cloud Shell (Ubuntu 24.04) — failed at line 314 with "rsync: command not found"
+   808→- Root cause: rsync is NOT pre-installed on fresh Ubuntu systems; setup.sh didn't include it in apt-get install
+   809→- Fix applied to setup.sh:
+   810→  1. Added `rsync` to the apt-get install list in Step 3 (line 234)
+   811→  2. Added `cp -r` fallback for GitHub clone mode (line 299-305) in case rsync still missing after install
+   812→  3. Added `find ... -print0 | xargs install -D` fallback for local copy mode (line 320-340) with same exclusion rules (no node_modules, .next, db/*.db, .env)
+   813→- Rebasing: remote had a README.md edit (user removed contact info section via GitHub web UI) — rebased local commit on top
+   814→- Pushed: commit 8e5f496 → GitHub main
+   815→- Verified: bash -n setup.sh passes syntax; rsync now appears in apt-get install line; both fallbacks in place
+   816→
+   817→Stage Summary:
+   818→- Fix deployed. User can now run `git pull && sudo bash setup.sh` on Cloud Shell (or any Ubuntu system without rsync) to complete installation.
+   819→- Note: Google Cloud Shell is ephemeral — installed services won't persist after session ends. This was a test run; the user will deploy to a real server later.
+   820→
+   821→---
+   822→Task ID: deploy-e2e-test
+   823→Agent: main (orchestrator)
+   824→Task: Run full E2E test of the deployment workflow in an isolated /tmp environment — clone from GitHub → install → start services → run all functional tests
+   825→
+   826→Work Log:
+   827→- Created isolated test env at /tmp/sarzemine-e2e-test (separate from sandbox at /home/z/my-project)
+   828→- STEP 1: git clone https://github.com/shekeayatparast/sarzemine-asal-deploy.git → 117 files, NO secrets in clone
+   829→- STEP 2 (setup.sh step 4): rsync project/ to install dir (with same exclusion rules: no node_modules/.next/.env/db/*.db)
+   830→- STEP 3 (setup.sh step 5): Wrote .env and bot .env with test token (8279950331:AAGW...) and admin ID 5207653104, port 3001 (site) + 3004 (bot) to avoid sandbox conflicts
+   831→- STEP 4 (setup.sh step 6): bun install (827 packages, 3.24s), prisma generate, next build (compiled, 7 routes), prisma db:push (SQLite created), db:seed (3 products: عسل گون, عسل کنار, عسل چند گیاه), bot bun install (10 packages)
+   832→- STEP 5: Started bot on port 3004 → "Telegram bot connected: @pathwayagent_bot (id: 8279950331)", polling active
+   833→- STEP 6: Started site on port 3001 → "Next.js 16.1.3 — Ready in 445ms"
+   834→
+   835→TESTS RUN:
+   836→- TEST 1: Site HTTP 200, 43791 bytes ✓
+   837→- TEST 2: Bot health: {"ok":true,"polling":true,"crashCount":0} ✓
+   838→- TEST 3: GET /api/products → 3 products (عسل گون 1400000/kg, عسل کنار 1200000/kg, عسل چند گیاه 1200000/kg) ✓
+   839→- TEST 4: POST /api/orders with proper format (province/city/items with productId/containerSize/quantity) → Order HN-80424 created, totalAmount=5200000, uniqueAmount=429, finalAmount=5200429, deliveryType=shahrekord ✓
+   840→- TEST 5: GET /api/orders/track?orderNumber=HN-80424 → full order details returned (items, payment status pending, order status awaiting_payment) ✓
+   841→- TEST 6: POST /notify/new-order to bot → bot log shows "📨 New order notification: HN-80424" (sent twice: once auto-notified by site, once by my manual test — both succeeded, admin received on Telegram) ✓
+   842→
+   843→ISSUES ENCOUNTERED:
+   844→- Order creation initially failed because I sent wrong format (used "location" instead of "province"+"city", and items didn't have productId/containerSize). Fixed by reading the API source.
+   845→- Background processes died when parent bash exited — fixed by running all tests in single bash session (processes inherit the session lifetime).
+   846→- sandbox bot (port 3003) was down before test started — restarted after test completed.
+   847→
+   848→CLEANUP:
+   849→- /tmp/sarzemine-e2e-test removed
+   850→- Sandbox production unaffected: site HTTP 200, bot restarted and polling=true
+   851→
+   852→Stage Summary:
+   853→- ✅ ALL 6 E2E TESTS PASSED in isolated environment
+   854→- ✅ Clone from GitHub works perfectly (117 files, no secrets)
+   855→- ✅ Build pipeline works: bun install + prisma generate + next build + db push + db seed
+   856→- ✅ Site serves HTTP 200 with full HTML content
+   857→- ✅ Bot connects to Telegram, polling active, no crashes
+   858→- ✅ Full order flow works: create → track → notify bot → admin receives on Telegram
+   859→- ✅ Sandbox production unaffected (separate DB, separate ports, isolated environment)
+   860→- The deployment is ready for production use on a real Linux server.
+   861→
+   862→---
+   863→Task ID: P5a-agent-panel-ui
+   864→Agent: full-stack-developer
+   865→Task: Build complete Agent Panel UI (login, register, dashboard, orders, profile)
+   866→
+   867→Work Log:
+   868→- Read worklog.md to understand prior work (site, bot, deploy package all complete).
+   869→- Inspected existing infrastructure:
+   870→  • src/lib/auth.ts: getCurrentAgent() invalidates non-active sessions — but task requires the layout to show "waiting for approval" page for pending agents. Modified getAgentFromToken to keep pending sessions valid (only blocked/rejected are invalidated), so the panel layout can branch on agent.status.
+   871→  • src/lib/stats.ts: AgentStats interface + computeAgentStats(agentId) returns weeklySeries, monthlySeries, orderStatusDistribution, topProducts, recentOrders.
+   872→  • src/lib/products.ts: CONTAINERS (0.5,1,2,3,4,25), PAYMENT_CARD_NUMBER, PAYMENT_CARD_HOLDER, CONTACT_PHONE_RAW.
+   873→  • src/lib/locations.ts: PROVINCES array (30 provinces, all cities).
+   874→  • src/lib/format.ts: toPersianDigits, formatToman, formatRial, formatJalaliDateTime, ORDER_STATUS_STEPS, statusStepIndex.
+   875→  • Existing API routes verified: POST /api/auth/agent/login (handles pending → pendingApproval:true), POST /api/auth/agent/register (auto-creates pending session), GET /api/agent/me (sanitized profile), GET /api/agent/stats (calls computeAgentStats), GET/POST /api/agent/orders, GET /api/agent/orders/[id], GET/PATCH /api/agent/profile.
+   876→
+   877→- Created cart store (src/lib/agent-cart-store.ts): Zustand store with localStorage persistence for the "place new order" page. Items have productId, containerSize, hasWax, quantity, unitPrice. Methods: addItem, updateQuantity, removeItem, clear, totalCount, totalKg, totalAmount.
+   878→
+   879→- Created shared components in src/components/agent/:
+   880→  1. OrderStatusBadge.tsx — colored Badge variants for 7 statuses (awaiting_payment, paid, confirmed, preparing, shipped, delivered, cancelled) using amber/yellow/emerald/orange/sky/green/red palette (NO indigo/blue as primary). Plus PaymentStatusBadge helper + orderStatusLabel reverse-map.
+   881→  2. StatCard.tsx — server component (NOT client — passing Lucide icons as props works fine). Shows title, value, icon, optional growthPct with up/down arrow + percentage badge.
+   882→  3. AgentSidebar.tsx — client component (uses usePathname for active link). 4 nav items: داشبورد (/agent), سفارش جدید (/agent/orders/new), تاریخچه سفارشات (/agent/orders), پروفایل (/agent/profile). Has a logout <form action="/api/auth/agent/logout" method="POST"> at the bottom.
+   883→  4. AgentHeader.tsx — client component (sticky top bar). Shows agent name + store name + balance pill (links to dashboard). On mobile, hamburger opens Sheet with the sidebar inside. Has logout button on mobile (desktop sidebar has its own logout).
+   884→  5. DashboardCharts.tsx — client component using recharts. 4 charts in a 2-col grid:
+   885→     • Weekly sales line chart (8 weeks, amber line)
+   886→     • Monthly sales bar chart (6 months, amber bars)
+   887→     • Order status donut (PieChart with honey palette + legend)
+   888→     • Top products horizontal bar chart
+   889→     Custom tooltip with Persian digits + Toman suffix. NO indigo/blue colors used.
+   890→  6. CopyButton.tsx — small client component for copying order number, card number, tracking code to clipboard with sonner toast feedback.
+   891→  7. ProfileForm.tsx — client component with two forms (profile info + password change). Province/city select dropdowns populated from PROVINCES. Phone field is read-only (not editable). All fields pre-filled from server-passed agent data. Client-side validation before PATCH /api/agent/profile.
+   892→
+   893→- Created pages in src/app/agent/:
+   894→  1. layout.tsx → moved to (panel)/layout.tsx (route group) so login/register are OUTSIDE the protected layout.
+   895→     • Uses getCurrentAgent() to check auth.
+   896→     • No session → redirect("/agent/login")
+   897→     • status === "pending" → WaitingApproval screen (icon, store name, logout, link to home)
+   898→     • status === "blocked" or "rejected" → BlockedScreen (icon, reason if rejected, logout)
+   899→     • status === "active" → renders AgentHeader + sidebar (desktop right, mobile hamburger) + main content
+   900→  2. (panel)/page.tsx (dashboard, server component):
+   901→     • Fetches agent record + computeAgentStats(agentId) directly (no API call needed since server-side)
+   902→     • 4 StatCards: فروش این ماه, کل سفارش‌ها, پورسانت, موجودی (with monthGrowthPct/weekGrowthPct badges)
+   903→     • Pending orders banner (if pendingOrders > 0)
+   904→     • DashboardCharts (4 charts)
+   905→     • Recent orders table (5 latest with Persian dates)
+   906→     • Account info card (commissionRate, totalSales, balance, totalOrders)
+   907→     • reverseStatusLabel helper converts Persian label back to status key for the badge
+   908→  3. login/page.tsx (client component):
+   909→     • Phone + password inputs (with Phone/Lock icons)
+   910→     • Submit → POST /api/auth/agent/login
+   911→     • On success: router.push("/agent")
+   912→     • On pendingApproval: toast + redirect (layout will show waiting page)
+   913→     • Links: /agent/register, /admin/login, /
+   914→     • Shows toast on errors (sonner)
+   915→  4. register/page.tsx (client component):
+   916→     • Fields: name, phone, password, storeName, province (Select), city (Select dependent on province), address (Textarea), nationalId (optional)
+   917→     • Client-side validate(): phone must be 09xxxxxxxxx, password ≥ 6 chars with letter+digits, storeName ≥ 3 chars, address ≥ 5 chars, nationalId 10 digits if provided
+   918→     • Submit → POST /api/auth/agent/register → toast "ثبت‌نام موفق" → router.push("/agent")
+   919→     • Links: /agent/login, /
+   920→  5. (panel)/orders/page.tsx (server component):
+   921→     • Reads searchParams: status (filter) + page (pagination)
+   922→     • Queries db.order.findMany with whereClause + pagination (20 per page)
+   923→     • Filter chips: همه، در انتظار پرداخت، پرداخت ثبت شد، تأیید مدیریت، تحویل به پست، تحویل داده شده
+   924→     • Table with: orderNumber (link to detail), date (Jalali), items count, final amount, payment status badge, order status badge, "جزئیات" link
+   925→     • Empty state with CTA to /agent/orders/new
+   926→     • Pagination controls (prev/next buttons + "page X of Y")
+   927→  6. (panel)/orders/new/page.tsx (client component — most complex page):
+   928→     • Loads products + agent profile on mount (parallel fetch)
+   929→     • Per-product selection state (Record<productId, {size, hasWax, qty}>)
+   930→     • For each product: container size 6-button grid (0.5,1,2,3,4,25 kg), wax Switch (disabled for non-1kg), quantity +/- stepper, "افزودن به سفارش — {price}" button
+   931→     • Cart panel (sticky on desktop): items list with per-line qty stepper + remove button, bonus honey hint (0.5kg per 5kg non-wholesale), total amount, total kg
+   932→     • Delivery info card: province/city Select (pre-filled from agent profile), address Textarea (pre-filled), notes Textarea
+   933→     • Submit button → POST /api/agent/orders with items + delivery info → toast + redirect to /agent/orders + clear cart
+   934→     • Loading skeletons during fetch
+   935→  7. (panel)/orders/[id]/page.tsx (server component):
+   936→     • Get order via db.order.findFirst({where: {id, agentId: user.id}, include: {items: true}})
+   937→     • notFound() if missing
+   938→     • StatusTracker inline component (replicates the customer site's progress timeline)
+   939→     • If payment pending: payment instructions card with card number, holder, final amount, unique amount explanation, support phone
+   940→     • If shipped/delivered with trackingCode: sky-themed tracking code card with copy button + link to tracking.post.ir
+   941→     • Items table (productName, container, wax, qty, unit price, total)
+   942→     • Two side-by-side cards: financial details (totalAmount, uniqueAmount, finalAmount, payment badge) + delivery info (province, city, delivery type, address, notes)
+   943→  8. (panel)/profile/page.tsx (server component that just renders ProfileForm client component with agent data)
+   944→
+   945→- Restructured agent folder with route group:
+   946→  • src/app/agent/login/page.tsx — outside panel layout (no auth wall)
+   947→  • src/app/agent/register/page.tsx — outside panel layout (no auth wall)
+   948→  • src/app/agent/(panel)/layout.tsx — protected panel layout
+   949→  • src/app/agent/(panel)/page.tsx — dashboard
+   950→  • src/app/agent/(panel)/orders/page.tsx — order history
+   951→  • src/app/agent/(panel)/orders/new/page.tsx — new order
+   952→  • src/app/agent/(panel)/orders/[id]/page.tsx — order detail
+   953→  • src/app/agent/(panel)/profile/page.tsx — profile
+   954→
+   955→- Lint: initial run had 2 warnings (unused eslint-disable directives in ProfileForm.tsx and orders/new/page.tsx) — fixed by removing the directives. Final lint: 0 errors, 0 warnings.
+   956→
+   957→- Initial dev server issue: After `bun run db:generate` (regenerated Prisma client mid-session), the dev server's cached `globalForPrisma.prisma` singleton held an OLD PrismaClient that didn't expose the Agent model — so `db.agent.findUnique()` crashed with "Cannot read properties of undefined". This affected ALL agent/admin API routes, not just mine.
+   958→  Fix: Killed the dev server (the supervisor didn't auto-restart it) and started a fresh one via setsid. The new dev server loaded a fresh PrismaClient with all models.
+   959→
+   960→- Found & fixed a runtime error in StatCard: it was initially marked "use client" but received Lucide icons (React components / functions) as props from the server-rendered dashboard page. Next.js doesn't allow passing functions from Server Components to Client Components. Fix: removed "use client" from StatCard — it has no client interactivity, so it can be a pure Server Component, and icons can be passed through as props (they're just rendered, not invoked, on the server side).
+   961→
+   962→- Verified end-to-end with curl + agent-browser:
+   963→  • Register new agent (POST /api/auth/agent/register) → returns {success, agent, message}. Account starts in "pending" status.
+   964→  • GET /agent while pending → renders "در انتظار تأیید مدیر" waiting page (with store name + logout + link to home). ✓
+   965→  • Login with pending agent → returns pendingApproval:true. ✓
+   966→  • Manually activated test agent via bun script → status="active".
+   967→  • Login again → redirects to /agent dashboard.
+   968→  • Dashboard renders: stat cards (فروش این ماه, کل سفارش‌ها, پورسانت, موجودی), 4 charts (Weekly sales line, Monthly sales bar, Order status donut, Top products bar), recent orders table (empty state with CTA), account info card. ✓
+   969→  • Orders history page: empty state with CTA. ✓
+   970→  • New order page: product cards with size grid, wax toggle, qty stepper; cart panel; delivery info card. ✓
+   971→  • Placed an order via POST /api/agent/orders with valid product ID → success: HN-22473, totalAmount=2,800,000, uniqueAmount=294, finalAmount=2,800,294.
+   972→  • Orders list now shows HN-22473. ✓
+   973→  • Order detail page shows: order number, status tracker, payment instructions (card number, holder, amount, support phone), items table, financial details, delivery info. ✓
+   974→  • Profile page: shows account overview (status, commission rate, total orders, total sales), profile form (pre-filled), password change form. ✓
+   975→  • PATCH /api/agent/profile with name+storeName → success. ✓
+   976→  • PATCH /api/agent/profile with currentPassword+newPassword → success. ✓
+   977→  • Login with new password → success (proves password was actually changed). ✓
+   978→  • Cleaned up test agent + test order from DB after verification.
+   979→
+   980→- Screenshots captured for visual verification (saved to /home/z/my-project/):
+   981→  • screenshot-agent-login.png — login page (centered card on cream gradient, store icon, phone+password fields, honey-gradient submit button)
+   982→  • screenshot-agent-register.png — register form (2-column layout on desktop)
+   983→  • screenshot-agent-dashboard.png — full dashboard with stat cards, charts, recent orders
+   984→  • screenshot-agent-orders.png — orders list (empty state with CTA)
+   985→  • screenshot-agent-new-order.png — new order page (product cards + cart + delivery form)
+   986→  • screenshot-agent-order-detail.png — order detail (status tracker + payment instructions + items table)
+   987→  • screenshot-agent-profile.png — profile page (account info + 2 forms)
+   988→
+   989→Stage Summary:
+   990→- Files created:
+   991→  • src/lib/agent-cart-store.ts (Zustand store for new-order cart)
+   992→  • src/components/agent/OrderStatusBadge.tsx (badge + payment badge + label helpers)
+   993→  • src/components/agent/StatCard.tsx (server component stat card with growth %)
+   994→  • src/components/agent/AgentSidebar.tsx (sidebar nav with logout form)
+   995→  • src/components/agent/AgentHeader.tsx (sticky top bar with balance + mobile hamburger)
+   996→  • src/components/agent/DashboardCharts.tsx (4 recharts in 2x2 grid)
+   997→  • src/components/agent/CopyButton.tsx (clipboard copy with toast)
+   998→  • src/components/agent/ProfileForm.tsx (profile + password forms, client component)
+   999→  • src/app/agent/login/page.tsx (login form)
+  1000→  • src/app/agent/register/page.tsx (register form with all fields + validation)
+  1001→  • src/app/agent/(panel)/layout.tsx (protected layout with pending/blocked handling)
+  1002→  • src/app/agent/(panel)/page.tsx (dashboard with stats + charts + recent orders)
+  1003→  • src/app/agent/(panel)/orders/page.tsx (order history with filter chips + pagination)
+  1004→  • src/app/agent/(panel)/orders/new/page.tsx (place new order — most complex page)
+  1005→  • src/app/agent/(panel)/orders/[id]/page.tsx (order detail with status tracker + payment instructions)
+  1006→  • src/app/agent/(panel)/profile/page.tsx (server component rendering ProfileForm)
+  1007→- Modified: src/lib/auth.ts (getAgentFromToken allows pending sessions to remain valid so the waiting-page branch can render)
+  1008→- Lint: PASS (0 errors, 0 warnings)
+  1009→- Dev server issue encountered + fixed (Prisma client regeneration mid-session caused stale singleton; resolved by restarting the dev server)
+  1010→- StatCard initially had "use client" — removed it because passing Lucide icons from a server component to a client component is not allowed; StatCard has no client interactivity so it can be a pure server component
+  1011→- Full end-to-end verified: register → pending waiting page → admin-activate → login → dashboard → orders list → place new order → order detail → profile edit → password change → re-login with new password. All worked.
+  1012→- Notes:
+  1013→  • Login button click via agent-browser CLI didn't trigger form submit reliably (button type=submit inside form should work — likely a quirk of the agent-browser click event). Worked around by using agent-browser eval to call fetch() to the login API which set the session cookie, then navigated to /agent.
+  1014→  • The /admin/login link in the login page is a placeholder (admin panel is a separate task).
+  1015→  • All agent pages force dynamic rendering (export const dynamic = "force-dynamic") so they always reflect the latest DB state.
+  1016→
+  1017→---
+  1018→Task ID: P5b-admin-panel-ui
+  1019→Agent: full-stack-developer
+  1020→Task: Build complete Admin Panel UI (login, dashboard, agents mgmt, orders, reports)
+  1021→
+  1022→Work Log:
+  1023→- Read worklog.md and prior agent panel worklog entry (P5a) to understand design patterns and existing infrastructure.
+  1024→- Inspected existing files: src/lib/auth.ts (getCurrentAdmin), src/lib/stats.ts (computeAdminStats + AdminStats interface), src/lib/format.ts (toPersianDigits, formatToman, formatJalaliDate/Time, IRAN_TZ), src/app/agent/(panel)/layout.tsx + page.tsx, src/components/agent/{AgentSidebar,AgentHeader,StatCard,DashboardCharts,OrderStatusBadge}.tsx, src/app/agent/login/page.tsx, prisma/schema.prisma (Agent/Admin/Order/OrderItem/AgentPayment/AgentSession models), src/app/api/admin/{me,stats,agents,agents/[id],orders}/route.ts (all already built), src/app/api/auth/admin/{login,logout}/route.ts.
+  1025→- Decided to mirror the agent panel's "(panel)" route group pattern so the admin login page sits outside the protected layout. Created `src/app/admin/(panel)/` for protected pages + `src/app/admin/login/` for the public login.
+  1026→- Created shared client components in src/components/admin/:
+  1027→  1. AdminSidebar.tsx — client component (uses usePathname). 4 nav items: داشبورد (/admin), مدیریت نمایندگان (/admin/agents), سفارش‌ها (/admin/orders), گزارش‌ها (/admin/reports). Shows role badge + logout form posting to /api/auth/admin/logout.
+  1028→  2. AdminHeader.tsx — sticky top bar with mobile hamburger Sheet wrapping the sidebar. Shows admin name + role + crown badge + mobile logout button.
+  1029→  3. StatCard.tsx — server component (no client interactivity, can pass Lucide icons as props). Shows title, value, large icon tile, optional growth % (green/red), or optional hint text. Honey-themed icon backgrounds.
+  1030→  4. StatusBadge.tsx — colored Badge with status dot. 4 statuses: pending=amber, active=emerald, blocked=red, rejected=rose. Exports statusLabel helper.
+  1031→  5. RejectReasonDialog.tsx — controlled shadcn Dialog with Textarea for entering rejection reason (min 5 chars, max 500). PATCHes /api/admin/agents/[id] with {status:"rejected", rejectionReason} on submit, shows sonner toast, calls router.refresh() and optional onDone callback.
+  1032→  6. AgentActionsButtons.tsx — client component for the agent list table row. Shows context-aware buttons: pending→تأیید (green)+رد (red, opens RejectReasonDialog), active→مسدود (orange), blocked/rejected→فعال‌سازی (green). All rows get جزئیات link. Calls PATCH endpoint + router.refresh().
+  1033→  7. AgentStatusManager.tsx — for the agent details page. Same action buttons as AgentActionsButtons (approve/block/activate) PLUS an "ویرایش پورسانت" button that opens a Dialog with a Slider (0-50%) + numeric Input for setting commissionRate. PATCHes the rate, refreshes.
+  1034→  8. AdminDashboardCharts.tsx — client component using recharts. 4 charts in a 2-col grid: weekly revenue AreaChart (gradient fill), monthly revenue BarChart, order status donut PieChart with legend, top agents horizontal BarChart with honey palette (NO indigo/blue). Custom ChartTooltip with Persian digits + Toman.
+  1035→  9. ReportsCharts.tsx — client component for the reports page. Larger charts: full-width weekly revenue AreaChart, monthly stacked BarChart (نماینده/مشتری), revenue share donut, order status donut, top products horizontal BarChart, growth line chart (computed from weekly revenue deltas), top agents leaderboard with progress bars + rank badges (crown for #1).
+  1036→  10. AgentsFilters.tsx — client component for the agents page. Renders 5 filter tab buttons (all/pending/active/blocked/rejected) with live counts + a search form. Updates URL params via router.push() in a useTransition.
+  1037→  11. OrdersFilters.tsx — client component for the orders page. Renders 3 type tabs (all/customer/agent) + two Select dropdowns for orderStatus + paymentStatus. Updates URL params.
+  1038→  12. DownloadAgentsCsvButton.tsx — client component that fetches /api/admin/agents?limit=500 then synthesizes a CSV Blob in-browser with UTF-8 BOM (so Excel opens Persian text correctly). Triggers a download with today's date in filename.
+  1039→
+  1040→- Created admin pages in src/app/admin/:
+  1041→  1. login/page.tsx — client component. Username + password form. POST /api/auth/admin/login → redirect to /admin. Links to /agent/login (ورود به پنل نماینده) and / (بازگشت به سایت). Sonner toast on errors.
+  1042→  2. (panel)/layout.tsx — server component. getCurrentAdmin() check → redirect to /admin/login if no session. Also queries Admin record to confirm account is still active. Renders AdminHeader + desktop sidebar (RTL right side) + main content. Mobile sidebar in Sheet.
+  1043→  3. (panel)/page.tsx — dashboard server component. Calls computeAdminStats(). Shows: welcome banner with last login, pending agents banner (with CTA to filter), 4 StatCards (درآمد کل/کل سفارش‌ها/نماینده‌های فعال/پورسانت پرداختی) with growth %, 4 MiniStats (این هفته/این ماه/سفارش‌های نماینده/سفارش‌های مشتری), AdminDashboardCharts (4 charts), recent agents list (left) + recent orders table (right) with OrderStatusBadge/PaymentStatusBadge, and a quick active-agents table at the bottom (ActiveAgentsList sub-component queries db.agent.findMany directly).
+  1044→  4. (panel)/agents/page.tsx — server component, reads searchParams. Queries db.agent.findMany with where clause (status filter + OR name/storeName/phone contains). Renders AgentsFilters + agents table (desktop) / card list (mobile). Per-row AgentActionsButtons. Empty state when no agents match.
+  1045→  5. (panel)/agents/[id]/page.tsx — server component, getAgent via db.agent.findUnique({where:{id}, include:{orders, payments}}). notFound() if missing (verified: GET /admin/agents/nonexistent-id → 404). Shows: breadcrumb + agent header with avatar + status badge, rejection reason banner (if rejected) / approval banner (if active), AgentStatusManager card with action buttons + commission editor, 4 MiniStats (orders/sales/balance/commission), profile info card (2 cols, all agent fields + address), financial summary card (cream gradient bg), order history table (50 latest), payment history table (20 latest with credit/debit coloring).
+  1046→  6. (panel)/orders/page.tsx — server component, reads searchParams (orderType/orderStatus/paymentStatus/page). Renders OrdersFilters + paginated orders table (20/page) with type badge, payment badge, order status badge, "مشاهده" link that opens /track?orderNumber=X in a new tab. Prev/next pagination buttons in RTL (ArrowRight for prev, ArrowLeft for next).
+  1047→  7. (panel)/reports/page.tsx — server component, calls computeAdminStats(). Renders: header with DownloadAgentsCsvButton + back-to-dashboard, 4 main StatCards (درآمد کل/درآمد این ماه/میانگین ارزش سفارش/پورسانت پرداختی), 4 MiniStats (total agents/active agents/agent revenue/customer revenue), ReportsCharts (5+ charts: weekly revenue area, monthly stacked agent vs customer, revenue share donut, order status donut, top products bar, growth line, top agents leaderboard with progress bars), top products detail table with rank badges + avg price, recent agents + recent orders summary cards.
+  1048→
+  1049→- Verified all admin pages render with HTTP 200:
+  1050→  • GET /admin/login → 200 (renders login card with Crown logo + form)
+  1051→  • GET /admin (no auth) → 307 redirect to /admin/login
+  1052→  • POST /api/auth/admin/login {admin/admin12345} → 200, sets session cookie
+  1053→  • GET /admin (with cookie) → 200, dashboard renders (258KB HTML)
+  1054→  • GET /admin/agents → 200 (empty state — no agents in DB)
+  1055→  • GET /admin/orders → 200 (5 orders from prior testing)
+  1056→  • GET /admin/reports → 200 (charts + stats render)
+  1057→  • GET /admin/agents/nonexistent-id → 404 (notFound() works)
+  1058→- Verified dashboard contains key elements: "درآمد کل", "نماینده‌های فعال", "پورسانت پرداختی", "روند درآمد هفتگی", "برترین نماینده‌ها", "پنل مدیریت".
+  1059→- Verified agents page contains filter tabs + search.
+  1060→- Verified orders page contains "فیلتر پیشرفته" + dropdowns.
+  1061→- Verified reports page contains "خروجی CSV", "میانگین ارزش سفارش", "جدول برترین نماینده‌ها".
+  1062→
+  1063→- Lint: PASS (0 errors, 0 warnings). Initial run had no issues because I caught potential unused imports early (removed `UserPlus`, `Clock`, `Crown`, `statusLabel`, `reverseStatusLabel`) and used `[, startTransition]` instead of `[_, startTransition]` to avoid the unused-var lint error.
+  1064→
+  1065→Stage Summary:
+  1066→- Files created:
+  1067→  Components (12):
+  1068→    • src/components/admin/AdminSidebar.tsx
+  1069→    • src/components/admin/AdminHeader.tsx
+  1070→    • src/components/admin/StatCard.tsx
+  1071→    • src/components/admin/StatusBadge.tsx
+  1072→    • src/components/admin/RejectReasonDialog.tsx
+  1073→    • src/components/admin/AgentActionsButtons.tsx
+  1074→    • src/components/admin/AgentStatusManager.tsx
+  1075→    • src/components/admin/AdminDashboardCharts.tsx
+  1076→    • src/components/admin/ReportsCharts.tsx
+  1077→    • src/components/admin/AgentsFilters.tsx
+  1078→    • src/components/admin/OrdersFilters.tsx
+  1079→    • src/components/admin/DownloadAgentsCsvButton.tsx
+  1080→  Pages (7):
+  1081→    • src/app/admin/login/page.tsx
+  1082→    • src/app/admin/(panel)/layout.tsx
+  1083→    • src/app/admin/(panel)/page.tsx (dashboard)
+  1084→    • src/app/admin/(panel)/agents/page.tsx
+  1085→    • src/app/admin/(panel)/agents/[id]/page.tsx
+  1086→    • src/app/admin/(panel)/orders/page.tsx
+  1087→    • src/app/admin/(panel)/reports/page.tsx
+  1088→  Agent context:
+  1089→    • /home/z/my-project/agent-ctx/P5b-admin-panel-ui-full-stack-developer.md
+  1090→- Lint: PASS (0 errors, 0 warnings)
+  1091→- Runtime: All admin pages verified end-to-end with curl + cookies. Login → session cookie → 5 protected pages all render with HTTP 200 + correct Persian content + honey color palette + RTL layout. 404 handler for non-existent agent works.
+  1092→- Issues/notes:
+  1093→  • All API endpoints already existed before this task (auth + admin/me, admin/stats, admin/agents, admin/agents/[id], admin/orders). Only UI was built.
+  1094→  • The agent panel previously built uses a `(panel)` route group pattern — admin mirrors this so login page is outside the protected layout.
+  1095→  • StatCard is a server component (no client hooks) so Lucide icons can be passed as props (the same fix the agent panel discovered).
+  1096→  • ReportsCharts computes weekly growth deltas locally since stats.ts doesn't expose per-week growth — derived from `weeklyRevenueSeries`.
+  1097→  • CSV download is done client-side (in-browser Blob + UTF-8 BOM for Excel Persian text compatibility) so no new API endpoint was needed.
+  1098→  • Order detail "view" links open `/track?orderNumber=X` in a new tab — reuses the existing customer-facing track page rather than duplicating admin-side order detail (saves complexity).
+  1099→  • Default admin credentials (admin/admin12345) already seeded via prisma/seed-admin.ts from prior work; login verified to work.
+  1100→
+  1101→---
+  1102→Task ID: agent-admin-panels-feature
+  1103→Agent: main (orchestrator)
+  1104→Task: Add Agent Panel (نماینده فروش) + Admin Panel (مدیریت) to the site — full feature implementation, testing, and deployment to GitHub
+  1105→
+  1106→Work Log:
+  1107→- Phase 1 (DB schema): Added 4 new models (Agent, AgentSession, Admin, AgentPayment) + agentId/orderType on Order. db:push applied successfully.
+  1108→- Phase 2 (Auth foundation): Created src/lib/auth.ts with bcryptjs + signed cookies (HMAC for admin, DB-stored tokens for agents). Persian-to-English digit conversion for phone validation. 7-day TTL, httpOnly cookies.
+  1109→- Phase 3a (Agent auth APIs): register, login, logout endpoints. Auto-creates session token. Pending status allows login but dashboard locked.
+  1110→- Phase 3b (Admin auth APIs): login, logout. Uses signed-cookie approach (no DB session — admins are trusted, can be revoked by changing ADMIN_SESSION_SECRET).
+  1111→- Phase 4a (Agent data APIs): /api/agent/{me, orders, orders/[id], stats, profile} — full CRUD for agent's own data + stats.
+  1112→- Phase 4b (Admin data APIs): /api/admin/{me, agents, agents/[id], orders, stats} — admin can manage all agents + see all orders.
+  1113→- Phase 5a (Agent panel UI via subagent): Built login, register, dashboard with 4 charts, orders list, new order page (most complex), order details, profile. 15 files.
+  1114→- Phase 5b (Admin panel UI via subagent): Built login, dashboard, agents mgmt, agent details, orders, reports with 5+ charts. 17 files. Includes CSV export.
+  1115→- Phase 6 (Site integration): Added "پنل نماینده" + "پنل مدیریت" links to site Header (desktop + mobile).
+  1116→- Phase 7 (E2E testing via Agent Browser):
+  1117→  • Main site loads with new header links ✓
+  1118→  • Agent registration form works (province/city dropdowns cascade) ✓
+  1119→  • Admin login (admin/admin12345) ✓
+  1120→  • Approve pending agent ✓
+  1121→  • Agent login + dashboard renders with charts (recharts) ✓
+  1122→  • Agent places order via UI (HN-84535, 5,600,275 toman) ✓
+  1123→  • Order appears in agent history + admin dashboard ✓
+  1124→  • Admin agent details page shows orders + commission rate ✓
+  1125→  • Agent profile page works ✓
+  1126→  • Mobile responsive tested (375x812 viewport) ✓
+  1127→- Phase 8 (Bug fix): Phone validation rejected Persian digits (form auto-converts to Persian display). Fixed by adding persianToEnglishDigits() in normalizeIranPhone. Both Persian + English digits now accepted.
+  1128→- Phase 9 (Deploy + push):
+  1129→  • Synced 34 new files to deploy/project/ folder
+  1130→  • Updated setup.sh to seed admin user (admin/admin12345) by default
+  1131→  • Added .env.example documentation for ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_SESSION_SECRET
+  1132→  • Updated README with new panel features + credentials + workflow
+  1133→  • Re-initialized /home/z/my-project/deploy/.git (was wiped during sync)
+  1134→  • Committed: 1 commit, 51 files changed, 8460 insertions
+  1135→  • Pushed to GitHub: commit 04b81b9 on main
+  1136→
+  1137→Stage Summary:
+  1138→- ✅ Agent Panel complete: register → admin approves → login → dashboard (charts) → place order → see in history → track payment
+  1139→- ✅ Admin Panel complete: login → dashboard (charts) → manage agents (approve/block/reject + set commission) → see all orders → reports (5+ charts + CSV export)
+  1140→- ✅ Telegram bot unaffected (no changes needed)
+  1141→- ✅ Existing customer order flow still works (HN-30662 customer order created during testing)
+  1142→- ✅ Pushed to GitHub at commit 04b81b9 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`
+  1143→- ✅ Default admin credentials: admin / admin12345 (user should change after first login)
+  1144→- ✅ 34 new files, ~3000 lines of new code, all lint-clean
+  1145→
+  1146→---
+  1147→Task ID: bugfix-post-login-redirect
+  1148→Agent: main (orchestrator)
+  1149→Task: Fix "login succeeds but user is not redirected to the panel" bug reported by user
+  1150→
+  1151→Work Log:
+  1152→- User reported: entered username "admin" + password "admin12345", received the success toast "ورود با موفقیت انجام شد" but was NOT redirected to /admin — stayed stuck on /admin/login.
+  1153→- First verified the password itself was correct (user had previously tried "admin1234" which is wrong — correct is "admin12345" with 5 digits). Confirmed via bcrypt.compare against the DB hash.
+  1154→- Inspected /admin/login/page.tsx and found the redirect pattern:
+  1155→    router.push("/admin");
+  1156→    router.refresh();
+  1157→  This same pattern was also present in /agent/login, /agent/register, and /agent/(panel)/orders/new.
+  1158→- Root cause: race condition between router.push() and router.refresh() in Next.js App Router.
+  1159→  • router.push() queues a client-side navigation (RSC fetch) to the new URL.
+  1160→  • router.refresh() immediately fires a refresh of the CURRENT route (still /admin/login).
+  1161→  • The refresh can win the race, leaving the user stuck on the login page even though the toast appeared.
+  1162→  • Server-side log confirmed this: after POST /api/auth/admin/login 200, we saw GET /admin 200 (the push) AND GET /admin/login 200 (the refresh of the old URL).
+  1163→- Fix: replaced the pattern with window.location.assign() which does a full-page navigation. This:
+  1164→  • Bypasses the client-side router entirely (no race condition).
+  1165→  • Guarantees the freshly-set session cookie (from the fetch Set-Cookie header) is sent with the next request.
+  1166→  • Reliably lands the user on the dashboard.
+  1167→- Applied the fix to all 4 affected files:
+  1168→  • src/app/admin/login/page.tsx
+  1169→  • src/app/agent/login/page.tsx (both branches: pendingApproval and normal)
+  1170→  • src/app/agent/register/page.tsx
+  1171→  • src/app/agent/(panel)/orders/new/page.tsx (after placing an order, redirect to /agent/orders)
+  1172→- Removed the now-unused `useRouter` import and `const router = useRouter()` from all 4 files to keep lint clean.
+  1173→- Lint: PASS (0 errors, 0 warnings).
+  1174→- Restarted dev server (was down after long idle), verified with agent-browser:
+  1175→  • Clear cookies → open /admin/login → fill admin/admin12345 → click login → URL changes to /admin, dashboard renders "سلام مدیر اصلی 👋", sidebar (داشبورد / مدیریت نمایندگان / سفارش‌ها / گزارش‌ها), recent orders table. ✓ No page errors.
+  1176→  • Clear cookies → open /agent/login → fill 09123456789/test1234 → click login → URL changes to /agent, dashboard renders with agent sidebar (داشبورد / سفارش جدید / تاریخچه سفارشات / پروفایل). ✓ No page errors.
+  1177→- Server log now shows the correct pattern: POST /api/auth/admin/login 200 → GET /admin 200 (single request, no more spurious GET /admin/login after the redirect).
+  1178→- Synced the 4 fixed files to /home/z/my-project/deploy/project/, committed (b116f95), and pushed to GitHub.
+  1179→
+  1180→Stage Summary:
+  1181→- ✅ Bug fixed: post-login redirect now reliably navigates to the dashboard.
+  1182→- ✅ Root cause identified and documented (router.push + router.refresh race condition).
+  1183→- ✅ Same fix applied to agent login, agent register, and post-order placement.
+  1184→- ✅ Lint clean, end-to-end verified with agent-browser for both admin and agent flows.
+  1185→- ✅ Pushed to GitHub at commit b116f95 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`.
+  1186→- Files modified: 4 (admin/login, agent/login, agent/register, agent/(panel)/orders/new)
+  1187→
+  1188→---
+  1189→Task ID: bugfix-three-issues-track-logout-phone
+  1190→Agent: main (orchestrator)
+  1191→Task: Fix 3 bugs reported by user: (1) /track link 404s, (2) logout shows raw "true" text, (3) agent register rejects Persian-digit phones
+  1192→
+  1193→Work Log:
+  1194→- Issue 1: /track?orderNumber=HN-84535 returns 404
+  1195→  • Root cause: There was no /track page route. The track feature was a "view" inside the home page (Zustand nav store view==="track"). The admin/agent panels link to /track?orderNumber=X, but that URL didn't exist.
+  1196→  • Fix: Created src/app/track/page.tsx — standalone route that reads orderNumber & phone from the async searchParams (Next.js 16 requires awaiting), renders Header + Footer + TrackOrdersView with those as initial values.
+  1197→  • Modified src/components/site/TrackOrdersView.tsx: added optional initialOrderNumber/initialPhone props, useState initializers read from them, added autoSearchedRef + useEffect on mount that calls doSearch(false) once when initial values are present.
+  1198→  • Verified: GET /track?orderNumber=HN-84535 → 200, page renders, order number pre-filled in input, auto-search runs, toast "۱ سفارش یافت شد" appears, refresh button visible (results displayed). No console errors.
+  1199→
+  1200→- Issue 2: After logout, user sees a page that just says "true"
+  1201→  • Root cause: The sidebar/header logout buttons use plain HTML <form action="/api/auth/.../logout" method="POST">. The logout APIs returned NextResponse.json({success:true}) — the browser received the JSON body and displayed it as the page content (just "true" or {"success":true}).
+  1202→  • Fix: Changed both logout APIs (admin + agent) to return NextResponse.redirect(new URL("/admin/login" or "/agent/login", req.url), 303). HTTP 303 (See Other) is the standard PRG (Post/Redirect/Get) pattern — the browser follows it with a GET to the login page.
+  1203→  • Verified: Admin login → click "خروج از حساب" → URL changes to /admin/login, login page renders. Agent login → click "خروج از حساب" → URL changes to /agent/login, login page renders. No more raw "true" text.
+  1204→
+  1205→- Issue 3: Agent register rejects phone numbers entered with Persian keyboard
+  1206→  • Root cause: The client-side validate() function in src/app/agent/register/page.tsx used the regex /^09\d{9}$/ which only matches ASCII digits (0-9). Persian digits (۰-۹) and Arabic-Indic digits (٠-٩) failed. The backend (auth.ts) already had persianToEnglishDigits() to handle this, but the client form didn't use it.
+  1207→  • Fix: Moved the phone helpers (persianToEnglishDigits, normalizeIranPhone, isValidIranPhone) from src/lib/auth.ts to src/lib/format.ts (which is client-safe — no next/headers, no db imports). src/lib/auth.ts now re-exports them from format.ts so server code can still import from "@/lib/auth". The register page imports isValidIranPhone from "@/lib/format" and uses it in the client-side validate() function. Also fixed the nationalId validation to accept Persian digits.
+  1208→  • Verified the function with bun: isValidIranPhone("۰۹۱۲۳۴۵۶۷۸۹") → true (was false before). Also tested +98, 0098, with dashes/spaces — all valid.
+  1209→  • Verified end-to-end with agent-browser: Filled register form with Persian-digit phone "۰۹۱۲۳۴۵۶۷۸۹", selected province/city, clicked submit → client-side validation PASSED → POST /api/auth/agent/register reached the server (returned 409 because test agent 09123456789 already exists — this is the correct behavior, proving validation passed).
+  1210→
+  1211→- Lint: PASS (0 errors, 0 warnings). One initial warning about an unused eslint-disable directive in TrackOrdersView.tsx was fixed by removing the directive.
+  1212→
+  1213→- Synced all 7 modified/created files to /home/z/my-project/deploy/project/:
+  1214→  • src/app/track/page.tsx (NEW)
+  1215→  • src/components/site/TrackOrdersView.tsx (modified)
+  1216→  • src/app/api/auth/admin/logout/route.ts (modified)
+  1217→  • src/app/api/auth/agent/logout/route.ts (modified)
+  1218→  • src/lib/format.ts (modified — added phone helpers)
+  1219→  • src/lib/auth.ts (modified — re-export from format, removed duplicates)
+  1220→  • src/app/agent/register/page.tsx (modified — use isValidIranPhone)
+  1221→- Committed (2ccc563) and pushed to GitHub.
+  1222→
+  1223→Stage Summary:
+  1224→- ✅ /track page now works — deep links from admin/agent panels render the order detail with auto-search.
+  1225→- ✅ Logout now redirects to the login page (no more raw "true" text).
+  1226→- ✅ Persian-digit phones now pass client-side validation in the agent register form.
+  1227→- ✅ All 3 fixes verified end-to-end with agent-browser.
+  1228→- ✅ Lint clean.
+  1229→- ✅ Pushed to GitHub at commit 2ccc563 — user can update their server with `sudo bash /opt/sarzemine-asal/update.sh`.
+  1230→- Files: 7 (1 new, 6 modified), 160 insertions, 37 deletions.
+  1231→
+  1232→---
+  1233→Task ID: phase1-quick-fixes
+  1234→Agent: main (orchestrator)
+  1235→Task: Phase 1 quick independent fixes (A1, A2, B3, B9, C17, C18, C19) + schema changes (B10/B14)
+  1236→
+  1237→Work Log:
+  1238→- A1 (Gon description corruption): Discovered the "کد پیگیری" the user saw was actually the order number "HN-65950" that had been saved as the Gon product's description in the DB (likely via the Telegram bot's edit-description feature during testing). Fixed by restoring the correct description from the seed data.
+  1239→- A2 (Products bg image): ProductsView.tsx header section used `bg-honey-gradient` (no image). Changed to use `relative overflow-hidden` + `<img src="/images/honeycomb-texture.png">` + gradient overlay, matching the HomeView hero pattern.
+  1240→- B3 (StatCard truncation): Both admin and agent StatCard.tsx used `truncate` class on the value `<p>`, which clips with "...". Changed to `text-xl md:text-2xl font-extrabold break-words leading-tight` so the full number always shows.
+  1241→- B9 (Logout redirect localhost): The logout APIs used `new URL("/admin/login", req.url)` which produced `localhost:3000` (internal address) when behind the Caddy gateway. Changed to use a relative `Location: /admin/login` header via `new NextResponse(null, { status: 303, headers: { Location: "..." } })` so the browser resolves it against the public-facing domain.
+  1242→- C17 (Remove agent bonus): The agent new order page displayed a "نیم کیلو عسل هدیه" hint (bonus per 5kg). Removed the JSX block, the `bonusKg` calculation, and the `BONUS_THRESHOLD_KG`/`BONUS_AMOUNT_KG`/`Gift` imports. The bonus remains in the customer-facing CartView/AddToCartDialog (correct).
+  1243→- C18 (Agent sidebar active state): The `isActive` function used `pathname.startsWith(href + "/")` which caused `/agent/orders` to be "active" when on `/agent/orders/new`. Fixed by special-casing `/agent/orders` to exact-match only.
+  1244→- C19 (City auto-load): Discovered the city was NOT loading from the agent profile despite `setCity(profileData.agent.city)` being called. Root cause: Radix Select has an internal mechanism that calls `onValueChange("")` when the items list changes (from `[]` to the city list), which reset the just-set city. Fix: moved city initialization to a separate `useEffect` with a `setTimeout(0)` delay so Radix settles its items before the city value is set. Also removed the old `useEffect` that cleared city on province change (replaced with an explicit `handleProvinceChange` handler on the province Select). Verified: province + city both load correctly now.
+  1245→- Schema changes (B10/B14 prerequisites): Added `stockKg Float @default(0)` and `agentPricePerKg Int @default(0)` to the Product model in prisma/schema.prisma. Ran `bun run db:push` successfully. Restarted dev server to pick up new Prisma client.
+  1246→
+  1247→Stage Summary:
+  1248→- ✅ A1: Gon description restored in DB
+  1249→- ✅ A2: Products section now has honeycomb-texture bg image with gradient overlay
+  1250→- ✅ B3: StatCards no longer truncate large numbers
+  1251→- ✅ B9: Logout redirects use relative URLs (no more localhost:3000)
+  1252→- ✅ C17: Agent orders no longer show bonus hint
+  1253→- ✅ C18: Agent sidebar "سفارش جدید" no longer also activates "تاریخچه سفارشات"
+  1254→- ✅ C19: City auto-loads from agent profile in new order page (Radix Select workaround)
+  1255→- ✅ Schema: Product model now has stockKg + agentPricePerKg for inventory + dual pricing
+  1256→- Lint: PASS
+  1257→- Remaining tasks (B4, B5, B6, B7, B8, B10, B11, B12, B13, B14, B15, C16) to be handled by subagents in parallel.
+  1258→
+  1259→---
+  1260→Task ID: B4-B5
+  1261→Agent: full-stack-developer
+  1262→Task: Agent order history — expandable rows with full item details + table alignment
+  1263→
+  1264→Work Log:
+  1265→- Read worklog.md and the existing `/admin/agents/[id]/page.tsx` to understand prior work (P5b-admin-panel-ui built the page; phase1-quick-fixes built the quick fixes).
+  1266→- Confirmed Prisma schema: Order has `items: OrderItem[]`; OrderItem has productName, containerSize, hasWax, isWholesale, quantity, unitPrice, total (NO createdAt field on OrderItem — adjusted the include accordingly).
+  1267→- Updated the Prisma query in `src/app/admin/(panel)/agents/[id]/page.tsx` `orders.select` clause to include `items: { select: { id, productId, productName, containerSize, hasWax, isWholesale, quantity, unitPrice, total } }`. The payments include block is untouched.
+  1268→- Created new client component `src/components/admin/AgentOrderHistoryTable.tsx`:
+  1269→  • `"use client"` directive.
+  1270→  • Exports `AgentOrderWithItems` + `AgentOrderItem` types so the parent (server component) can pass the Prisma-shaped orders directly with proper typing.
+  1271→  • Uses a `Set<string>` of order IDs for expand-state, toggled via a stable `useCallback`. Multiple rows can be expanded independently.
+  1272→  • Renders the order history table: columns شماره سفارش، تاریخ، مبلغ، پرداخت، وضعیت، جزئیات.
+  1273→  • Each row's order-number cell is a `Link` to `/admin/orders/${o.id}` with an `ExternalLink` icon (since the order-detail page is being built by another agent in parallel, we just link to it).
+  1274→  • The «جزئیات» column has a chevron Button (ChevronDown / ChevronUp) that also shows the per-order item count (e.g. "۳ قلم") for at-a-glance context.
+  1275→  • When expanded, a sub-row (`colSpan={6}`) renders an inner bordered Table listing every OrderItem with columns: محصول (with a Package icon + a "عمده" badge when isWholesale), ظرف (e.g. "۲ کیلو"), موم (با موم / بدون موم badge with Droplet icon), تعداد, قیمت واحد, جمع قلم.
+  1276→  • Below the items sub-table there is a footer row showing total item count + total quantity, plus an outline "مشاهده صفحه کامل سفارش" button linking to `/admin/orders/${o.id}`.
+  1277→  • Empty state: when `orders.length === 0`, renders the same `ShoppingCart` empty-state as before (preserved UX).
+  1278→- Replaced the inline order-history Table JSX in the page (the old block with TableHeader / map / etc.) with `<AgentOrderHistoryTable orders={agent.orders} />`. Updated the CardDescription to add a hint «برای مشاهده جزئیات اقلام هر سفارش روی دکمهٔ «جزئیات» بزنید».
+  1279→- Removed the now-unused imports `OrderStatusBadge`, `PaymentStatusBadge` from `@/components/agent/OrderStatusBadge` in the page (they live in the client component now). Added the import for `AgentOrderHistoryTable`.
+  1280→- Kept the payment-history table below untouched (still uses the same shadcn Table primitives inline). The unused-import rule would have flagged `Table`, `Badge`, `formatJalaliDateTime` if they were unused — they are NOT (still used by the payment history), so they remain imported.
+  1281→- Table alignment fix: explicit alignment classes applied to every header + cell.
+  1282→  • Order-history table: text-right (شماره سفارش، تاریخ) · text-left (مبلغ — also `dir="ltr"` so the Persian currency string lays out correctly) · text-center (پرداخت، وضعیت، جزئیات badges/buttons).
+  1283→  • Items sub-table: text-right (محصول) · text-center (ظرف، موم، تعداد) · text-left (قیمت واحد، جمع قلم — both `dir="ltr"`).
+  1284→  • `whitespace-nowrap` added to date / amount / unit-price / line-total cells so they never wrap mid-number.
+  1285→- RTL: parent already has `dir="rtl"`; the table inherits it. The Toman strings inside numeric cells use `dir="ltr"` so the "تومان" suffix stays to the right of the number rather than wrapping awkwardly.
+  1286→- Verified lint: `bun run lint` → 0 errors / 0 warnings.
+  1287→- Verified runtime: logged in as the seeded admin (`admin`/`admin12345`), fetched the agent `cmsyvxe200002s1g3z2jj7ruw` (محسن فرهیخته — has 2 orders). GET `/admin/agents/{id}` returned HTTP 200 in 767ms (compile 36ms + render 731ms). HTML contains: 2 "نمایش جزئیات سفارش" chevron buttons (one per order row, all collapsed), order numbers HN-81936 and HN-95548, the new «جزئیات» column header, and the «قلم» count label. Server-rendered HTML correctly does NOT include expanded item sub-tables (initial state is empty Set) — they only appear after client-side hydration + click.
+  1288→
+  1289→Stage Summary:
+  1290→- ✅ Prisma query now includes `items` per order (with all OrderItem fields needed for display).
+  1291→- ✅ New client component `src/components/admin/AgentOrderHistoryTable.tsx` renders the order history with per-row expand/collapse using a `Set<string>` of order IDs.
+  1292→- ✅ Expanded sub-row shows every OrderItem: product name, container size (kg), wax status, quantity, unit price (toman), line total — plus an "عمده" badge for wholesale items and totals (item count + total quantity) and a deep-link button to `/admin/orders/{id}`.
+  1293→- ✅ Order number cell is a `Link` to `/admin/orders/${o.id}` (page being built by parallel agent — link is forward-compatible).
+  1294→- ✅ Table column alignment fixed: text-right / text-center / text-left consistent across headers + cells; numeric cells use `dir="ltr"` so Persian Toman strings render cleanly.
+  1295→- ✅ New «جزئیات» column with a chevron Button toggling row expansion; chevron icon swaps between ChevronDown / ChevronUp; `aria-expanded` + `aria-label` set for accessibility.
+  1296→- ✅ Empty state preserved (ShoppingCart icon + "هنوز سفارشی ثبت نکرده است." message) when agent has no orders.
+  1297→- ✅ Payment-history table below untouched.
+  1298→- ✅ Lint PASS (0 errors, 0 warnings).
+
+[showing lines 800-1298 of 1300; use offset=1299 with limit to continue reading]
