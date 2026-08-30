@@ -12,6 +12,7 @@ import {
   Crown,
   User,
   Package,
+  Newspaper,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ export interface AdminNavItem {
 const NAV_ITEMS: AdminNavItem[] = [
   { href: "/admin", label: "داشبورد", icon: LayoutDashboard },
   { href: "/admin/products", label: "محصولات", icon: Package },
+  { href: "/admin/blog", label: "وبلاگ", icon: Newspaper },
   { href: "/admin/agents", label: "مدیریت نمایندگان", icon: Store },
   { href: "/admin/orders", label: "سفارش‌ها", icon: ShoppingCart },
   { href: "/admin/customers", label: "مشتریان", icon: Users },

@@ -101,7 +101,6 @@ export async function POST(req: NextRequest) {
         address: data.address,
         nationalId: data.nationalId || null,
         status: "pending", // requires admin approval
-        commissionRate: 10, // default 10%
       },
     });
 

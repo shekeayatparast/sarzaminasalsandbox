@@ -53,7 +53,6 @@ export default async function AgentDashboardPage() {
     name: string;
     storeName: string;
     phone: string;
-    commissionRate: number;
     balance: number;
     totalSales: number;
     totalOrders: number;
@@ -69,7 +68,6 @@ export default async function AgentDashboardPage() {
         name: true,
         storeName: true,
         phone: true,
-        commissionRate: true,
         balance: true,
         totalSales: true,
         totalOrders: true,
@@ -126,8 +124,8 @@ export default async function AgentDashboardPage() {
           growthLabel="رشد هفتگی"
         />
         <StatCard
-          title="پورسانت کسب‌شده"
-          value={formatToman(stats.totalCommission)}
+          title="فروش کل"
+          value={formatToman(agent.totalSales)}
           icon={Coins}
           iconClassName="bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300"
         />
@@ -252,7 +250,7 @@ export default async function AgentDashboardPage() {
         </CardHeader>
         <CardContent className="px-0">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-            <Info label="نرخ پورسانت" value={`${toPersianDigits(agent.commissionRate)}٪`} />
+            <Info label="عضویت از" value={formatJalaliDateTime(agent.createdAt)} />
             <Info label="فروش کل" value={formatToman(agent.totalSales)} />
             <Info label="موجودی" value={formatToman(agent.balance)} />
             <Info label="سفارش‌های کل" value={toPersianDigits(agent.totalOrders)} />

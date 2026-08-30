@@ -33,7 +33,7 @@ import {
   Bell,
   UserCheck,
   Package,
-  Wallet,
+  Receipt,
 } from "lucide-react";
 import {
   toPersianDigits,
@@ -85,13 +85,19 @@ export default async function AdminDashboardPage() {
       totalRevenue: 0,
       agentRevenue: 0,
       customerRevenue: 0,
-      totalCommissionPaid: 0,
       thisWeekRevenue: 0,
       thisMonthRevenue: 0,
       weekGrowthPct: null,
       monthGrowthPct: null,
+      period: "monthly",
+      periodLabel: "ماهیانه",
+      periodOrders: 0,
+      periodRangeStart: new Date().toISOString(),
+      periodRangeEnd: new Date().toISOString(),
       weeklyRevenueSeries: [],
       monthlyRevenueSeries: [],
+      weeklySeriesLabel: "روند درآمد هفتگی",
+      monthlySeriesLabel: "مقایسه درآمد ماهانه",
       topAgents: [],
       topProducts: [],
       orderStatusDistribution: [],
@@ -177,11 +183,15 @@ export default async function AdminDashboardPage() {
           hint={`${toPersianDigits(stats.pendingAgents)} در انتظار، ${toPersianDigits(stats.blockedAgents)} مسدود`}
         />
         <StatCard
-          title="پورسانت پرداختی"
-          value={formatToman(stats.totalCommissionPaid)}
-          icon={Wallet}
+          title="میانگین هر سفارش"
+          value={
+            stats.totalOrders > 0
+              ? formatToman(Math.round(stats.totalRevenue / stats.totalOrders))
+              : "—"
+          }
+          icon={Receipt}
           iconClassName="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300"
-          hint="مجموع پورسانت نماینده‌ها"
+          hint="ارزش متوسط سفارش‌ها"
         />
       </div>
 
@@ -399,7 +409,6 @@ async function ActiveAgentsList() {
         phone: true,
         province: true,
         city: true,
-        commissionRate: true,
         totalSales: true,
         totalOrders: true,
         lastLoginAt: true,
@@ -429,7 +438,6 @@ async function ActiveAgentsList() {
           <TableHead>تلفن</TableHead>
           <TableHead>سفارش‌ها</TableHead>
           <TableHead>فروش کل</TableHead>
-          <TableHead>پورسانت</TableHead>
           <TableHead>آخرین ورود</TableHead>
       </TableRow>
       </TableHeader>
@@ -456,11 +464,6 @@ async function ActiveAgentsList() {
             </TableCell>
             <TableCell className="text-sm font-bold">
               {formatToman(a.totalSales)}
-            </TableCell>
-            <TableCell className="text-sm">
-              <Badge className="bg-honey-light/40 text-honey-dark border-honey/20">
-                {toPersianDigits(a.commissionRate)}٪
-              </Badge>
             </TableCell>
             <TableCell className="text-sm text-muted-foreground">
               {a.lastLoginAt ? formatJalaliDateTime(a.lastLoginAt) : "بدون ورود"}

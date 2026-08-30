@@ -198,3 +198,136 @@
 .animate-fade-in-up {
   animation: fade-in-up 0.6s ease-out forwards;
 }
+
+/* ═══════════ Modern UI utilities (site modernization) ═══════════ */
+
+/* Frosted glass surface */
+.glass {
+  background: oklch(0.99 0.01 85 / 0.62);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid oklch(1 0 0 / 0.45);
+}
+.dark .glass {
+  background: oklch(0.22 0.02 55 / 0.55);
+  border-color: oklch(1 0 0 / 0.1);
+}
+
+/* Honey glow shadows */
+.honey-glow {
+  box-shadow:
+    0 8px 28px -8px oklch(0.7 0.17 70 / 0.45),
+    0 2px 10px -2px oklch(0.7 0.17 70 / 0.28);
+}
+.honey-glow-lg {
+  box-shadow:
+    0 18px 50px -12px oklch(0.7 0.17 70 / 0.55),
+    0 6px 18px -6px oklch(0.68 0.16 68 / 0.35);
+}
+/* Soft glow used on hover (pair with transition-shadow) */
+.honey-glow-hover {
+  transition: box-shadow 0.35s ease, transform 0.35s ease, border-color 0.35s ease;
+}
+.honey-glow-hover:hover {
+  box-shadow:
+    0 16px 40px -12px oklch(0.7 0.17 70 / 0.42),
+    0 4px 14px -4px oklch(0.7 0.17 70 / 0.3);
+}
+
+/* Subtle honeycomb (hexagon) pattern — ok for light & dark */
+.bg-hexagon-pattern {
+  background-image: conic-gradient(
+    from 60deg at 75% 75%,
+    transparent 25%,
+    oklch(0.72 0.16 72 / 0.07) 0 50%,
+    transparent 75%
+  );
+  background-size: 30px 30px;
+}
+.bg-hexagon-pattern-strong {
+  background-image: conic-gradient(
+    from 60deg at 75% 75%,
+    transparent 25%,
+    oklch(0.99 0.01 85 / 0.08) 0 50%,
+    transparent 75%
+  );
+  background-size: 30px 30px;
+}
+/* Subtle offset dot grid */
+.bg-dot-pattern {
+  background-image:
+    radial-gradient(circle, oklch(0.7 0.17 70 / 0.12) 1.4px, transparent 1.5px),
+    radial-gradient(circle, oklch(0.7 0.17 70 / 0.07) 1.1px, transparent 1.2px);
+  background-size: 26px 26px;
+  background-position: 0 0, 13px 13px;
+}
+
+/* Shimmer sweep (loading placeholders, highlighted buttons) */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.animate-shimmer {
+  background-image: linear-gradient(
+    110deg,
+    transparent 30%,
+    oklch(1 0 0 / 0.35) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.6s linear infinite;
+}
+.animate-shimmer-honey {
+  background-image: linear-gradient(
+    110deg,
+    transparent 30%,
+    oklch(0.85 0.12 80 / 0.5) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 3s linear infinite;
+}
+
+/* Very slow float for decorative elements */
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-16px) rotate(4deg); }
+}
+.animate-float-slow {
+  animation: float-slow 8s ease-in-out infinite;
+}
+
+/* Soft breathing pulse (non-intrusive highlight) */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.82; transform: scale(1.02); }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 3.4s ease-in-out infinite;
+}
+
+/* Decorative honey divider line */
+.honey-divider {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    oklch(0.7 0.17 70 / 0.85) 20%,
+    oklch(0.58 0.15 58) 50%,
+    oklch(0.7 0.17 70 / 0.85) 80%,
+    transparent 100%
+  );
+  height: 3px;
+  border-radius: 999px;
+}
+
+/* Respect users who prefer reduced motion for CSS animations */
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer,
+  .animate-shimmer-honey,
+  .animate-float-slow,
+  .animate-pulse-soft,
+  .animate-soft-float,
+  .animate-honey-drip {
+    animation: none;
+  }
+}

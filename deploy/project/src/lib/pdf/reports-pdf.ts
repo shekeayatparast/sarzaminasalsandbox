@@ -323,9 +323,12 @@ export async function generateReportsPdf(
         `مسدود: ${toPersianDigits(stats.blockedAgents)}`,
     },
     {
-      label: "پورسانت پرداختی",
-      value: formatToman(stats.totalCommissionPaid),
-      hint: "مجموع پورسانت نماینده‌ها",
+      label: "میانگین هر سفارش",
+      value:
+        stats.totalOrders > 0
+          ? formatToman(Math.round(stats.totalRevenue / stats.totalOrders))
+          : "—",
+      hint: "ارزش متوسط سفارش‌ها",
     },
   ];
 

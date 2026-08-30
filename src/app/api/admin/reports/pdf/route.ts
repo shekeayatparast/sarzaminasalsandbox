@@ -33,9 +33,11 @@ export async function GET(req: NextRequest) {
     // Build a Jalali date stamp for the filename
     const now = new Date();
     const datePart = formatStamp(now);
-    return new NextResponse(pdfBytes, {
-      status: 200,
-      headers: {
+    return new NextResponse(
+      new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" }),
+      {
+        status: 200,
+        headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="sarzemine-asal-report-${datePart}.pdf"`,
         "Cache-Control": "no-store, no-cache, must-revalidate",

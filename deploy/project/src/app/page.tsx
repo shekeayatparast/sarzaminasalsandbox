@@ -11,9 +11,14 @@ import { BenefitsView } from "@/components/site/BenefitsView";
 import { CartView } from "@/components/site/CartView";
 import { ContactView } from "@/components/site/ContactView";
 import { TrackOrdersView } from "@/components/site/TrackOrdersView";
+import { BlogView } from "@/components/site/BlogView";
+import { BlogPostView } from "@/components/site/BlogPostView";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 
 export default function Home() {
   const view = useNav((s) => s.view);
+  const selectedSlug = useNav((s) => s.selectedSlug);
+  const reduced = useReducedMotion();
 
   // scroll to top on view change
   useEffect(() => {
@@ -24,13 +29,25 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
       <main className="flex-1">
-        {view === "home" && <HomeView />}
-        {view === "products" && <ProductsView />}
-        {view === "about" && <AboutView />}
-        {view === "benefits" && <BenefitsView />}
-        {view === "cart" && <CartView />}
-        {view === "contact" && <ContactView />}
-        {view === "track" && <TrackOrdersView />}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={view}
+            initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+          >
+            {view === "home" && <HomeView />}
+            {view === "products" && <ProductsView />}
+            {view === "about" && <AboutView />}
+            {view === "benefits" && <BenefitsView />}
+            {view === "cart" && <CartView />}
+            {view === "contact" && <ContactView />}
+            {view === "track" && <TrackOrdersView />}
+            {view === "blog" &&
+              (selectedSlug ? <BlogPostView /> : <BlogView />)}
+          </motion.div>
+        </AnimatePresence>
       </main>
       <Footer />
     </div>

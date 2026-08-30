@@ -1,0 +1,1274 @@
+     1→"use client";
+     2→
+     3→// ProductManager — combined inventory (B10) + product CRUD (B13) client UI.
+     4→//
+     5→// Receives the full product list (incl. stockKg + agentPricePerKg) from the
+     6→// admin server page. Renders:
+     7→//   • a search + "add product" toolbar
+     8→//   • a product table with image, name, slug, customer/agent prices, stock,
+     9→//     featured toggle, low-stock indicator and per-row actions
+    10→//   • an inline stock editor (B10) — type a number, click "ذخیره"
+    11→//   • a full create/edit dialog (B13) with all fields + image upload (data URL)
+    12→//   • a delete confirm dialog (B13)
+    13→// Toast feedback (sonner) + router.refresh() after every mutation.
+    14→
+    15→import { useMemo, useState, useEffect, useRef, FormEvent, ChangeEvent } from "react";
+    16→import { useRouter } from "next/navigation";
+    17→import {
+    18→  Card,
+    19→  CardContent,
+    20→  CardDescription,
+    21→  CardHeader,
+    22→  CardTitle,
+    23→} from "@/components/ui/card";
+    24→import { Button } from "@/components/ui/button";
+    25→import { Input } from "@/components/ui/input";
+    26→import { Label } from "@/components/ui/label";
+    27→import { Textarea } from "@/components/ui/textarea";
+    28→import { Switch } from "@/components/ui/switch";
+    29→import { Badge } from "@/components/ui/badge";
+    30→import {
+    31→  Table,
+    32→  TableBody,
+    33→  TableCell,
+    34→  TableHead,
+    35→  TableHeader,
+    36→  TableRow,
+    37→} from "@/components/ui/table";
+    38→import {
+    39→  Dialog,
+    40→  DialogContent,
+    41→  DialogDescription,
+    42→  DialogFooter,
+    43→  DialogHeader,
+    44→  DialogTitle,
+    45→} from "@/components/ui/dialog";
+    46→import {
+    47→  AlertDialog,
+    48→  AlertDialogAction,
+    49→  AlertDialogCancel,
+    50→  AlertDialogContent,
+    51→  AlertDialogDescription,
+    52→  AlertDialogFooter,
+    53→  AlertDialogHeader,
+    54→  AlertDialogTitle,
+    55→} from "@/components/ui/alert-dialog";
+    56→import { toast } from "sonner";
+    57→import {
+    58→  Package,
+    59→  Plus,
+    60→  Pencil,
+    61→  Trash2,
+    62→  Save,
+    63→  AlertTriangle,
+    64→  Image as ImageIcon,
+    65→  Loader2,
+    66→  Search,
+    67→  Star,
+    68→  X,
+    69→  Boxes,
+    70→  TrendingDown,
+    71→} from "lucide-react";
+    72→import {
+    73→  formatToman,
+    74→  toPersianDigits,
+    75→  formatJalaliDateTime,
+    76→} from "@/lib/format";
+    77→import { cn } from "@/lib/utils";
+    78→
+    79→// ── Types ───────────────────────────────────────────────────────────────
+    80→// Mirrors the Prisma Product shape (dates → ISO strings) so the server page
+    81→// can pass the raw Prisma objects straight through (just map Date → iso).
+    82→
+    83→export interface AdminProduct {
+    84→  id: string;
+    85→  name: string;
+    86→  slug: string;
+    87→  description: string;
+    88→  pricePerKg: number;
+    89→  agentPricePerKg: number;
+    90→  stockKg: number;
+    91→  color: string;
+    92→  origin: string;
+    93→  benefits: string;
+    94→  image: string | null;
+    95→  featured: boolean;
+    96→  createdAt: string;
+    97→  updatedAt: string;
+    98→}
+    99→
+   100→const LOW_STOCK_THRESHOLD = 5;
+   101→
+   102→// ── Helpers ─────────────────────────────────────────────────────────────
+   103→// Persian (۰-۹) and Arabic-Indic (٠-٩) digit tables
+   104→const FA_DIGITS_ARR = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
+   105→const AR_DIGITS_ARR = ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"];
+   106→
+   107→/** Convert Persian/Arabic digits in a string to ASCII digits. */
+   108→function toEnglishDigits(input: string): string {
+   109→  let out = input;
+   110→  for (let i = 0; i < 10; i++) {
+   111→    out = out.replace(new RegExp(FA_DIGITS_ARR[i], "g"), String(i));
+   112→    out = out.replace(new RegExp(AR_DIGITS_ARR[i], "g"), String(i));
+   113→  }
+   114→  return out;
+   115→}
+   116→
+   117→/** Convert a Persian-style number input to a JS number. Returns NaN if empty. */
+   118→function parseNumberInput(s: string): number {
+   119→  const cleaned = toEnglishDigits(s).replace(/[,٬\s]/g, "");
+   120→  if (cleaned === "") return NaN;
+   121→  return Number(cleaned);
+   122→}
+   123→
+   124→/** Auto-suggest a slug from a Persian name — fallback to "product-<n>". */
+   125→function slugify(name: string): string {
+   126→  // Persian → ASCII-ish slug. We just lowercase, replace spaces/duplicates
+   127→  // with dashes, strip non a-z0-9-. The user can edit it manually anyway.
+   128→  const base = name
+   129→    .trim()
+   130→    .toLowerCase()
+   131→    .replace(/[\s_]+/g, "-")
+   132→    .replace(/[^a-z0-9-]/g, "")
+   133→    .replace(/-+/g, "-")
+   134→    .replace(/^-|-$/g, "");
+   135→  return base || "product";
+   136→}
+   137→
+   138→// ── Sub-component: ProductFormDialog ────────────────────────────────────
+   139→// Re-used for both create and edit. When `product` is null → create mode.
+   140→
+   141→interface FormState {
+   142→  name: string;
+   143→  slug: string;
+   144→  description: string;
+   145→  benefits: string;
+   146→  pricePerKg: string; // keep as string for input control
+   147→  agentPricePerKg: string;
+   148→  stockKg: string;
+   149→  color: string;
+   150→  origin: string;
+   151→  image: string | null; // data URL or path
+   152→  featured: boolean;
+   153→}
+   154→
+   155→function ProductFormDialog({
+   156→  open,
+   157→  onOpenChange,
+   158→  product,
+   159→}: {
+   160→  open: boolean;
+   161→  onOpenChange: (v: boolean) => void;
+   162→  product: AdminProduct | null;
+   163→}) {
+   164→  const router = useRouter();
+   165→  const [form, setForm] = useState<FormState>(emptyForm());
+   166→  const [saving, setSaving] = useState(false);
+   167→  const [slugTouched, setSlugTouched] = useState(false);
+   168→  const [imgBusy, setImgBusy] = useState(false);
+   169→  const [imgError, setImgError] = useState<string | null>(null);
+   170→  const fileInputRef = useRef<HTMLInputElement | null>(null);
+   171→
+   172→  // Hydrate form when dialog opens or product changes
+   173→  useEffect(() => {
+   174→    if (!open) return;
+   175→    setSlugTouched(false);
+   176→    setImgError(null);
+   177→    if (product) {
+   178→      setForm({
+   179→        name: product.name,
+   180→        slug: product.slug,
+   181→        description: product.description,
+   182→        benefits: product.benefits || "",
+   183→        pricePerKg: String(product.pricePerKg),
+   184→        agentPricePerKg: String(product.agentPricePerKg),
+   185→        stockKg: String(product.stockKg),
+   186→        color: product.color || "",
+   187→        origin: product.origin || "",
+   188→        image: product.image ?? null,
+   189→        featured: product.featured,
+   190→      });
+   191→    } else {
+   192→      setForm(emptyForm());
+   193→    }
+   194→  }, [open, product]);
+   195→
+   196→  function emptyForm(): FormState {
+   197→    return {
+   198→      name: "",
+   199→      slug: "",
+   200→      description: "",
+   201→      benefits: "",
+   202→      pricePerKg: "",
+   203→      agentPricePerKg: "0",
+   204→      stockKg: "0",
+   205→      color: "",
+   206→      origin: "",
+   207→      image: null,
+   208→      featured: false,
+   209→    };
+   210→  }
+   211→
+   212→  const onField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+   213→    setForm((f) => ({ ...f, [key]: value }));
+   214→  };
+   215→
+   216→  const onNameChange = (v: string) => {
+   217→    setForm((f) => ({
+   218→      ...f,
+   219→      name: v,
+   220→      // Auto-update slug only if user hasn't manually edited it
+   221→      slug: slugTouched ? f.slug : slugify(v),
+   222→    }));
+   223→  };
+   224→
+   225→  const onSlugChange = (v: string) => {
+   226→    setSlugTouched(true);
+   227→    // Strip invalid chars live so user gets instant feedback
+   228→    const cleaned = v
+   229→      .toLowerCase()
+   230→      .replace(/\s+/g, "-")
+   231→      .replace(/[^a-z0-9-]/g, "")
+   232→      .replace(/-+/g, "-");
+   233→    onField("slug", cleaned);
+   234→  };
+   235→
+   236→  const onFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+   237→    const file = e.target.files?.[0];
+   238→    if (!file) return;
+   239→    setImgError(null);
+   240→    setImgBusy(true);
+   241→    try {
+   242→      if (file.size > 1_500_000) {
+   243→        // ~1.5MB cap — anything bigger gets too heavy for SQLite
+   244→        setImgError(
+   245→          "حجم تصویر باید کمتر از ۱.۵ مگابایت باشد. لطفاً تصویر کوچکتری انتخاب کنید."
+   246→        );
+   247→        setImgBusy(false);
+   248→        return;
+   249→      }
+   250→      const reader = new FileReader();
+   251→      reader.onload = () => {
+   252→        // reader.result is a data URL — store as-is
+   253→        onField("image", typeof reader.result === "string" ? reader.result : null);
+   254→        setImgBusy(false);
+   255→      };
+   256→      reader.onerror = () => {
+   257→        setImgError("خطا در خواندن فایل تصویر");
+   258→        setImgBusy(false);
+   259→      };
+   260→      reader.readAsDataURL(file);
+   261→    } catch (err) {
+   262→      console.error("[ProductForm image read] error:", err);
+   263→      setImgError("خطای غیرمنتظره در خواندن تصویر");
+   264→      setImgBusy(false);
+   265→    }
+   266→  };
+   267→
+   268→  const clearImage = () => {
+   269→    onField("image", null);
+   270→    if (fileInputRef.current) fileInputRef.current.value = "";
+   271→    setImgError(null);
+   272→  };
+   273→
+   274→  const handleSubmit = async (e: FormEvent) => {
+   275→    e.preventDefault();
+   276→    if (saving) return;
+   277→
+   278→    // Client-side validation (mirror server Zod)
+   279→    const name = form.name.trim();
+   280→    if (name.length < 2) {
+   281→      toast.error("نام محصول باید حداقل ۲ کاراکتر باشد");
+   282→      return;
+   283→    }
+   284→    const slug = form.slug.trim();
+   285→    if (!/^[a-z0-9-]+$/.test(slug) || slug.length < 2) {
+   286→      toast.error("اسلاگ نامعتبر است — فقط حروف انگلیسی کوچک، اعداد و خط تیره");
+   287→      return;
+   288→    }
+   289→    const description = form.description.trim();
+   290→    if (description.length < 5) {
+   291→      toast.error("توضیحات محصول را کاملتر بنویسید (حداقل ۵ کاراکتر)");
+   292→      return;
+   293→    }
+   294→    const pricePerKg = parseNumberInput(form.pricePerKg);
+   295→    if (isNaN(pricePerKg) || pricePerKg < 0 || !Number.isInteger(pricePerKg)) {
+   296→      toast.error("قیمت هر کیلو (مشتری) باید عدد صحیح مثبت باشد");
+   297→      return;
+   298→    }
+   299→    const agentPricePerKg = parseNumberInput(form.agentPricePerKg || "0") || 0;
+   300→    if (agentPricePerKg < 0 || !Number.isInteger(agentPricePerKg)) {
+   301→      toast.error("قیمت نماینده باید عدد صحیح مثبت یا ۰ باشد");
+   302→      return;
+   303→    }
+   304→    const stockKg = parseNumberInput(form.stockKg || "0") || 0;
+   305→    if (isNaN(stockKg) || stockKg < 0) {
+   306→      toast.error("موجودی باید عدد مثبت باشد");
+   307→      return;
+   308→    }
+   309→
+   310→    const body = {
+   311→      name,
+   312→      slug,
+   313→      description,
+   314→      benefits: form.benefits.trim(),
+   315→      pricePerKg,
+   316→      agentPricePerKg,
+   317→      stockKg,
+   318→      color: form.color.trim(),
+   319→      origin: form.origin.trim(),
+   320→      image: form.image,
+   321→      featured: form.featured,
+   322→    };
+   323→
+   324→    setSaving(true);
+   325→    try {
+   326→      const url = product
+   327→        ? `/api/admin/products/${product.id}`
+   328→        : "/api/admin/products";
+   329→      const method = product ? "PATCH" : "POST";
+   330→      const res = await fetch(url, {
+   331→        method,
+   332→        headers: { "Content-Type": "application/json" },
+   333→        body: JSON.stringify(body),
+   334→      });
+   335→      const data = await res.json();
+   336→      if (!res.ok) {
+   337→        toast.error(data.error || "ذخیره ناموفق بود");
+   338→        return;
+   339→      }
+   340→      toast.success(data.message || "محصول ذخیره شد");
+   341→      onOpenChange(false);
+   342→      // Give the dialog close animation a tick, then refresh server data
+   343→      setTimeout(() => router.refresh(), 250);
+   344→    } catch (err) {
+   345→      console.error("[ProductForm submit] error:", err);
+   346→      toast.error("خطای شبکه. لطفاً دوباره تلاش کنید.");
+   347→    } finally {
+   348→      setSaving(false);
+   349→    }
+   350→  };
+   351→
+   352→  return (
+   353→    <Dialog open={open} onOpenChange={onOpenChange}>
+   354→      <DialogContent
+   355→        className="sm:max-w-2xl max-h-[92vh] overflow-y-auto"
+   356→        dir="rtl"
+   357→      >
+   358→        <DialogHeader>
+   359→          <DialogTitle className="text-xl font-extrabold text-honey-dark flex items-center gap-2">
+   360→            {product ? (
+   361→              <Pencil className="w-5 h-5" />
+   362→            ) : (
+   363→              <Plus className="w-5 h-5" />
+   364→            )}
+   365→            {product ? "ویرایش محصول" : "افزودن محصول جدید"}
+   366→          </DialogTitle>
+   367→          <DialogDescription className="text-right">
+   368→            {product
+   369→              ? `در حال ویرایش «${product.name}»`
+   370→              : "یک محصول جدید به سرزمین عسل اضافه کنید"}
+   371→          </DialogDescription>
+   372→        </DialogHeader>
+   373→
+   374→        <form onSubmit={handleSubmit} className="space-y-4">
+   375→          {/* Image */}
+   376→          <div className="space-y-2">
+   377→            <Label className="text-sm font-bold">تصویر محصول</Label>
+   378→            <div className="flex items-start gap-3">
+   379→              <div className="w-24 h-24 rounded-xl border-2 border-dashed border-honey/40 bg-honey-light/20 flex items-center justify-center overflow-hidden shrink-0">
+   380→                {form.image ? (
+   381→                  <img
+   382→                    src={form.image}
+   383→                    alt="پیش‌نمایش"
+   384→                    className="w-full h-full object-cover"
+   385→                  />
+   386→                ) : (
+   387→                  <div className="flex flex-col items-center gap-1 text-honey-dark/60">
+   388→                    <Package className="w-8 h-8" />
+   389→                    <span className="text-[10px]">بدون تصویر</span>
+   390→                  </div>
+   391→                )}
+   392→              </div>
+   393→              <div className="flex-1 space-y-2">
+   394→                <input
+   395→                  ref={fileInputRef}
+   396→                  type="file"
+   397→                  accept="image/png, image/jpeg, image/webp"
+   398→                  onChange={onFileChange}
+   399→                  disabled={imgBusy || saving}
+   400→                  className="hidden"
+   401→                  id="product-image-input"
+   402→                />
+   403→                <div className="flex gap-2 flex-wrap">
+   404→                  <Button
+   405→                    type="button"
+   406→                    size="sm"
+   407→                    variant="outline"
+   408→                    onClick={() => fileInputRef.current?.click()}
+   409→                    disabled={imgBusy || saving}
+   410→                  >
+   411→                    {imgBusy ? (
+   412→                      <Loader2 className="w-4 h-4 animate-spin" />
+   413→                    ) : (
+   414→                      <ImageIcon className="w-4 h-4" />
+   415→                    )}
+   416→                    انتخاب فایل
+   417→                  </Button>
+   418→                  {form.image && (
+   419→                    <Button
+   420→                      type="button"
+   421→                      size="sm"
+   422→                      variant="ghost"
+   423→                      onClick={clearImage}
+   424→                      disabled={imgBusy || saving}
+   425→                      className="text-red-600 hover:bg-red-50 hover:text-red-700"
+   426→                    >
+   427→                      <X className="w-4 h-4" />
+   428→                      پاک کردن عکس
+   429→                    </Button>
+   430→                  )}
+   431→                </div>
+   432→                <p className="text-[11px] text-muted-foreground">
+   433→                  فرمت PNG/JPG/WebP — حداکثر ۱.۵ مگابایت
+   434→                </p>
+   435→                {imgError && (
+   436→                  <p className="text-[11px] text-red-600 flex items-center gap-1">
+   437→                    <AlertTriangle className="w-3 h-3" />
+   438→                    {imgError}
+   439→                  </p>
+   440→                )}
+   441→              </div>
+   442→            </div>
+   443→          </div>
+   444→
+   445→          {/* Name + Slug */}
+   446→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   447→            <div className="space-y-1.5">
+   448→              <Label htmlFor="p-name" className="text-sm font-bold">
+   449→                نام محصول <span className="text-red-500">*</span>
+   450→              </Label>
+   451→              <Input
+   452→                id="p-name"
+   453→                value={form.name}
+   454→                onChange={(e) => onNameChange(e.target.value)}
+   455→                maxLength={120}
+   456→                disabled={saving}
+   457→                placeholder="عسل گون"
+   458→              />
+   459→            </div>
+   460→            <div className="space-y-1.5">
+   461→              <Label htmlFor="p-slug" className="text-sm font-bold">
+   462→                اسلاگ (URL) <span className="text-red-500">*</span>
+   463→              </Label>
+   464→              <Input
+   465→                id="p-slug"
+   466→                value={form.slug}
+   467→                onChange={(e) => onSlugChange(e.target.value)}
+   468→                maxLength={80}
+   469→                disabled={saving}
+   470→                dir="ltr"
+   471→                placeholder="gon"
+   472→                className="text-left"
+   473→              />
+   474→              <p className="text-[11px] text-muted-foreground">
+   475→                فقط حروف انگلیسی کوچک، اعداد و خط تیره
+   476→              </p>
+   477→            </div>
+   478→          </div>
+   479→
+   480→          {/* Description */}
+   481→          <div className="space-y-1.5">
+   482→            <Label htmlFor="p-desc" className="text-sm font-bold">
+   483→              توضیحات <span className="text-red-500">*</span>
+   484→            </Label>
+   485→            <Textarea
+   486→              id="p-desc"
+   487→              value={form.description}
+   488→              onChange={(e) => onField("description", e.target.value)}
+   489→              rows={3}
+   490→              maxLength={2000}
+   491→              disabled={saving}
+   492→              placeholder="توضیحات محصول..."
+   493→            />
+   494→          </div>
+   495→
+   496→          {/* Benefits */}
+   497→          <div className="space-y-1.5">
+   498→            <Label htmlFor="p-benefits" className="text-sm font-bold">
+   499→              خواص
+   500→            </Label>
+   501→            <Textarea
+   502→              id="p-benefits"
+   503→              value={form.benefits}
+   504→              onChange={(e) => onField("benefits", e.target.value)}
+   505→              rows={2}
+   506→              maxLength={2000}
+   507→              disabled={saving}
+   508→              placeholder="خواص درمانی و تغذیه‌ای..."
+   509→            />
+   510→          </div>
+   511→
+   512→          {/* Prices */}
+   513→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   514→            <div className="space-y-1.5">
+   515→              <Label htmlFor="p-price" className="text-sm font-bold">
+   516→                قیمت هر کیلو (مشتری) — تومان{" "}
+   517→                <span className="text-red-500">*</span>
+   518→              </Label>
+   519→              <Input
+   520→                id="p-price"
+   521→                value={form.pricePerKg}
+   522→                onChange={(e) => onField("pricePerKg", e.target.value)}
+   523→                disabled={saving}
+   524→                dir="ltr"
+   525→                inputMode="numeric"
+   526→                className="text-left"
+   527→                placeholder="۱۴۰۰۰۰۰"
+   528→              />
+   529→              <p className="text-[11px] text-muted-foreground">
+   530→                {parseNumberInput(form.pricePerKg) >= 0 &&
+   531→                  !isNaN(parseNumberInput(form.pricePerKg)) && (
+   532→                    <>{formatToman(parseNumberInput(form.pricePerKg))}</>
+   533→                  )}
+   534→              </p>
+   535→            </div>
+   536→            <div className="space-y-1.5">
+   537→              <Label htmlFor="p-agent-price" className="text-sm font-bold">
+   538→                قیمت نماینده — تومان
+   539→              </Label>
+   540→              <Input
+   541→                id="p-agent-price"
+   542→                value={form.agentPricePerKg}
+   543→                onChange={(e) => onField("agentPricePerKg", e.target.value)}
+   544→                disabled={saving}
+   545→                dir="ltr"
+   546→                inputMode="numeric"
+   547→                className="text-left"
+   548→                placeholder="۰ (استفاده از قیمت مشتری)"
+   549→              />
+   550→              <p className="text-[11px] text-muted-foreground">
+   551→                {(() => {
+   552→                  const v = parseNumberInput(form.agentPricePerKg);
+   553→                  return v > 0
+   554→                    ? formatToman(v)
+   555→                    : "۰ = همان قیمت مشتری استفاده می‌شود";
+   556→                })()}
+   557→              </p>
+   558→            </div>
+   559→          </div>
+   560→
+   561→          {/* Stock + Color + Origin */}
+   562→          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+   563→            <div className="space-y-1.5">
+   564→              <Label htmlFor="p-stock" className="text-sm font-bold">
+   565→                موجودی (کیلوگرم)
+   566→              </Label>
+   567→              <Input
+   568→                id="p-stock"
+   569→                value={form.stockKg}
+   570→                onChange={(e) => onField("stockKg", e.target.value)}
+   571→                disabled={saving}
+   572→                dir="ltr"
+   573→                inputMode="decimal"
+   574→                className="text-left"
+   575→                placeholder="۰"
+   576→              />
+   577→            </div>
+   578→            <div className="space-y-1.5">
+   579→              <Label htmlFor="p-color" className="text-sm font-bold">
+   580→                رنگ
+   581→              </Label>
+   582→              <Input
+   583→                id="p-color"
+   584→                value={form.color}
+   585→                onChange={(e) => onField("color", e.target.value)}
+   586→                maxLength={60}
+   587→                disabled={saving}
+   588→                placeholder="کهربایی روشن"
+   589→              />
+   590→            </div>
+   591→            <div className="space-y-1.5">
+   592→              <Label htmlFor="p-origin" className="text-sm font-bold">
+   593→                منطقه جمع‌آوری
+   594→              </Label>
+   595→              <Input
+   596→                id="p-origin"
+   597→                value={form.origin}
+   598→                onChange={(e) => onField("origin", e.target.value)}
+   599→                maxLength={120}
+   600→                disabled={saving}
+   601→                placeholder="زاگرس"
+   602→              />
+   603→            </div>
+   604→          </div>
+   605→
+   606→          {/* Featured */}
+   607→          <div className="flex items-center justify-between rounded-xl border border-honey/30 bg-honey-light/20 p-3">
+   608→            <div className="flex-1">
+   609→              <Label
+   610→                htmlFor="p-featured"
+   611→                className="text-sm font-bold cursor-pointer flex items-center gap-1.5"
+   612→              >
+   613→                <Star className="w-4 h-4 text-honey-dark" />
+   614→                محصول ویژه
+   615→              </Label>
+   616→              <p className="text-[11px] text-muted-foreground mt-0.5">
+   617→                محصولات ویژه در صفحه اصلی نمایش داده می‌شوند
+   618→              </p>
+   619→            </div>
+   620→            <Switch
+   621→              id="p-featured"
+   622→              checked={form.featured}
+   623→              onCheckedChange={(v) => onField("featured", v)}
+   624→              disabled={saving}
+   625→            />
+   626→          </div>
+   627→
+   628→          <DialogFooter className="pt-2">
+   629→            <Button
+   630→              type="button"
+   631→              variant="ghost"
+   632→              onClick={() => onOpenChange(false)}
+   633→              disabled={saving}
+   634→            >
+   635→              انصراف
+   636→            </Button>
+   637→            <Button
+   638→              type="submit"
+   639→              disabled={saving}
+   640→              className="bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-md"
+   641→            >
+   642→              {saving ? (
+   643→                <Loader2 className="w-4 h-4 animate-spin" />
+   644→              ) : (
+   645→                <Save className="w-4 h-4" />
+   646→              )}
+   647→              {product ? "ذخیره تغییرات" : "ایجاد محصول"}
+   648→            </Button>
+   649→          </DialogFooter>
+   650→        </form>
+   651→      </DialogContent>
+   652→    </Dialog>
+   653→  );
+   654→}
+   655→
+   656→// ── Sub-component: StockEditor (inline, B10) ────────────────────────────
+   657→function StockEditor({
+   658→  product,
+   659→  onSaved,
+   660→}: {
+   661→  product: AdminProduct;
+   662→  onSaved?: () => void;
+   663→}) {
+   664→  const [value, setValue] = useState<string>(String(product.stockKg));
+   665→  const [saving, setSaving] = useState(false);
+   666→
+   667→  // Keep local value in sync if the product row updates from server refresh
+   668→  useEffect(() => {
+   669→    setValue(String(product.stockKg));
+   670→  }, [product.stockKg]);
+   671→
+   672→  const stock = parseNumberInput(value);
+   673→  const dirty = !isNaN(stock) && stock !== product.stockKg;
+   674→  const low = !isNaN(stock) && stock < LOW_STOCK_THRESHOLD;
+   675→
+   676→  const save = async () => {
+   677→    if (saving || !dirty) return;
+   678→    if (isNaN(stock) || stock < 0) {
+   679→      toast.error("موجودی باید عدد مثبت باشد");
+   680→      return;
+   681→    }
+   682→    setSaving(true);
+   683→    try {
+   684→      const res = await fetch(`/api/admin/products/${product.id}`, {
+   685→        method: "PATCH",
+   686→        headers: { "Content-Type": "application/json" },
+   687→        body: JSON.stringify({ stockKg: stock }),
+   688→      });
+   689→      const data = await res.json();
+   690→      if (!res.ok) {
+   691→        toast.error(data.error || "ذخیره ناموفق بود");
+   692→        return;
+   693→      }
+   694→      toast.success(`موجودی «${product.name}» به‌روزرسانی شد`);
+   695→      onSaved?.();
+   696→    } catch (err) {
+   697→      console.error("[StockEditor save] error:", err);
+   698→      toast.error("خطای شبکه. لطفاً دوباره تلاش کنید.");
+   699→    } finally {
+   700→      setSaving(false);
+   701→    }
+   702→  };
+   703→
+   704→  return (
+   705→    <div className="flex items-center gap-1.5" dir="ltr">
+   706→      <Input
+   707→        type="text"
+   708→        inputMode="decimal"
+   709→        value={value}
+   710→        onChange={(e) => setValue(e.target.value)}
+   711→        disabled={saving}
+   712→        className={cn(
+   713→          "h-8 w-20 text-center text-sm",
+   714→          low ? "text-red-600 border-red-300" : ""
+   715→        )}
+   716→        title="موجودی به کیلوگرم"
+   717→      />
+   718→      <span className="text-[10px] text-muted-foreground">کیلو</span>
+   719→      <Button
+   720→        type="button"
+   721→        size="icon"
+   722→        variant="ghost"
+   723→        className={cn(
+   724→          "h-7 w-7",
+   725→          dirty
+   726→            ? "bg-honey-light/40 text-honey-dark hover:bg-honey-light/60"
+   727→            : "opacity-40"
+   728→        )}
+   729→        onClick={save}
+   730→        disabled={saving || !dirty}
+   731→        title="ذخیره موجودی"
+   732→      >
+   733→        {saving ? (
+   734→          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+   735→        ) : (
+   736→          <Save className="w-3.5 h-3.5" />
+   737→        )}
+   738→      </Button>
+   739→    </div>
+   740→  );
+   741→}
+   742→
+   743→// ── Sub-component: Delete confirm dialog (B13) ─────────────────────────
+   744→function DeleteDialog({
+   745→  product,
+   746→  open,
+   747→  onOpenChange,
+   748→  onDone,
+   749→}: {
+   750→  product: AdminProduct | null;
+   751→  open: boolean;
+   752→  onOpenChange: (v: boolean) => void;
+   753→  onDone?: () => void;
+   754→}) {
+   755→  const [deleting, setDeleting] = useState(false);
+   756→
+   757→  const handleDelete = async () => {
+   758→    if (!product || deleting) return;
+   759→    setDeleting(true);
+   760→    try {
+   761→      const res = await fetch(`/api/admin/products/${product.id}`, {
+   762→        method: "DELETE",
+   763→      });
+   764→      const data = await res.json();
+   765→      if (!res.ok) {
+   766→        toast.error(data.error || "حذف ناموفق بود");
+   767→        return;
+   768→      }
+   769→      toast.success(`محصول «${product.name}» حذف شد`);
+   770→      onOpenChange(false);
+   771→      onDone?.();
+   772→    } catch (err) {
+   773→      console.error("[DeleteDialog] error:", err);
+   774→      toast.error("خطای شبکه. لطفاً دوباره تلاش کنید.");
+   775→    } finally {
+   776→      setDeleting(false);
+   777→    }
+   778→  };
+   779→
+   780→  return (
+   781→    <AlertDialog open={open} onOpenChange={onOpenChange}>
+   782→      <AlertDialogContent dir="rtl">
+   783→        <AlertDialogHeader>
+   784→          <AlertDialogTitle className="flex items-center gap-2 text-red-700 dark:text-red-400">
+   785→            <AlertTriangle className="w-5 h-5" />
+   786→            حذف محصول
+   787→          </AlertDialogTitle>
+   788→          <AlertDialogDescription>
+   789→            آیا از حذف «<b>{product?.name}</b>» مطمئن هستید؟ این عملیات
+   790→            غیرقابل بازگشت است.
+   791→            <br />
+   792→            <span className="text-[12px] text-muted-foreground mt-1 block">
+   793→              توجه: اگر این محصول قبلاً در سفارش‌ها استفاده شده باشد، حذف آن
+   794→              ممکن است ناممکن باشد. در آن صورت می‌توانید موجودی آن را به صفر
+   795→              برسانید یا آن را از حالت ویژه خارج کنید.
+   796→            </span>
+   797→          </AlertDialogDescription>
+   798→        </AlertDialogHeader>
+   799→        <AlertDialogFooter>
+   800→          <AlertDialogCancel disabled={deleting}>انصراف</AlertDialogCancel>
+   801→          <AlertDialogAction
+   802→            onClick={handleDelete}
+   803→            disabled={deleting}
+   804→            className={cn(
+   805→              "bg-red-600 hover:bg-red-700 text-white",
+   806→              deleting && "opacity-70 cursor-wait"
+   807→            )}
+   808→          >
+   809→            {deleting ? (
+   810→              <Loader2 className="w-4 h-4 animate-spin" />
+   811→            ) : (
+   812→              <Trash2 className="w-4 h-4" />
+   813→            )}
+   814→            حذف محصول
+   815→          </AlertDialogAction>
+   816→        </AlertDialogFooter>
+   817→      </AlertDialogContent>
+   818→    </AlertDialog>
+   819→  );
+   820→}
+   821→
+   822→// ── Main component: ProductManager ──────────────────────────────────────
+   823→export function ProductManager({
+   824→  products,
+   825→}: {
+   826→  products: AdminProduct[];
+   827→}) {
+   828→  const router = useRouter();
+   829→  const [query, setQuery] = useState("");
+   830→  const [formOpen, setFormOpen] = useState(false);
+   831→  const [editing, setEditing] = useState<AdminProduct | null>(null);
+   832→  const [deleting, setDeleting] = useState<AdminProduct | null>(null);
+   833→
+   834→  const filtered = useMemo(() => {
+   835→    if (!query.trim()) return products;
+   836→    const q = query.trim().toLowerCase();
+   837→    return products.filter(
+   838→      (p) =>
+   839→        p.name.toLowerCase().includes(q) ||
+   840→        p.slug.toLowerCase().includes(q) ||
+   841→        p.origin.toLowerCase().includes(q) ||
+   842→        p.color.toLowerCase().includes(q)
+   843→    );
+   844→  }, [products, query]);
+   845→
+   846→  // Stats summary
+   847→  const stats = useMemo(() => {
+   848→    const total = products.length;
+   849→    const featured = products.filter((p) => p.featured).length;
+   850→    const lowStock = products.filter(
+   851→      (p) => p.stockKg < LOW_STOCK_THRESHOLD
+   852→    ).length;
+   853→    const outOfStock = products.filter((p) => p.stockKg <= 0).length;
+   854→    return { total, featured, lowStock, outOfStock };
+   855→  }, [products]);
+   856→
+   857→  const openCreate = () => {
+   858→    setEditing(null);
+   859→    setFormOpen(true);
+   860→  };
+   861→
+   862→  const openEdit = (p: AdminProduct) => {
+   863→    setEditing(p);
+   864→    setFormOpen(true);
+   865→  };
+   866→
+   867→  return (
+   868→    <div className="space-y-5" dir="rtl">
+   869→      {/* Toolbar */}
+   870→      <div className="flex flex-wrap items-center justify-between gap-3">
+   871→        <div>
+   872→          <h1 className="text-2xl font-extrabold text-honey-dark flex items-center gap-2">
+   873→            <Boxes className="w-6 h-6" />
+   874→            مدیریت محصولات و موجودی
+   875→          </h1>
+   876→          <p className="text-sm text-muted-foreground mt-1">
+   877→            مجموع {toPersianDigits(stats.total)} محصول ·{" "}
+   878→            {toPersianDigits(stats.featured)} ویژه ·{" "}
+   879→            <span
+   880→              className={cn(
+   881→                stats.lowStock > 0
+   882→                  ? "text-amber-700 font-bold"
+   883→                  : "text-muted-foreground"
+   884→              )}
+   885→            >
+   886→              {toPersianDigits(stats.lowStock)} با موجودی کم
+   887→            </span>{" "}
+   888→            ·{" "}
+   889→            <span
+   890→              className={cn(
+   891→                stats.outOfStock > 0
+   892→                  ? "text-red-600 font-bold"
+   893→                  : "text-muted-foreground"
+   894→              )}
+   895→            >
+   896→              {toPersianDigits(stats.outOfStock)} ناموجود
+   897→            </span>
+   898→          </p>
+   899→        </div>
+   900→        <Button
+   901→          onClick={openCreate}
+   902→          className="bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-md"
+   903→        >
+   904→          <Plus className="w-4 h-4 ml-1" />
+   905→          افزودن محصول جدید
+   906→        </Button>
+   907→      </div>
+   908→
+   909→      {/* Quick stats cards */}
+   910→      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+   911→        <StatTile
+   912→          icon={<Boxes className="w-5 h-5" />}
+   913→          label="کل محصولات"
+   914→          value={toPersianDigits(stats.total)}
+   915→          tint="honey"
+   916→        />
+   917→        <StatTile
+   918→          icon={<Star className="w-5 h-5" />}
+   919→          label="محصولات ویژه"
+   920→          value={toPersianDigits(stats.featured)}
+   921→          tint="honey"
+   922→        />
+   923→        <StatTile
+   924→          icon={<TrendingDown className="w-5 h-5" />}
+   925→          label="موجودی کم (زیر ۵ کیلو)"
+   926→          value={toPersianDigits(stats.lowStock)}
+   927→          tint={stats.lowStock > 0 ? "warn" : "neutral"}
+   928→        />
+   929→        <StatTile
+   930→          icon={<AlertTriangle className="w-5 h-5" />}
+   931→          label="ناموجود (۰ کیلو)"
+   932→          value={toPersianDigits(stats.outOfStock)}
+   933→          tint={stats.outOfStock > 0 ? "danger" : "neutral"}
+   934→        />
+   935→      </div>
+   936→
+   937→      {/* Search bar */}
+   938→      <div className="relative">
+   939→        <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+   940→        <Input
+   941→          value={query}
+   942→          onChange={(e) => setQuery(e.target.value)}
+   943→          placeholder="جستجو بر اساس نام، اسلاگ، رنگ یا منطقه..."
+   944→          className="pr-10"
+   945→          dir="rtl"
+   946→        />
+   947→        {query && (
+   948→          <button
+   949→            type="button"
+   950→            onClick={() => setQuery("")}
+   951→            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+   952→            aria-label="پاک کردن"
+   953→          >
+   954→            <X className="w-4 h-4" />
+   955→          </button>
+   956→        )}
+   957→      </div>
+   958→
+   959→      {/* Products table */}
+   960→      <Card className="gap-0 p-0 overflow-hidden">
+   961→        <CardHeader className="p-4 border-b bg-muted/30">
+   962→          <CardTitle className="text-base flex items-center gap-2">
+   963→            <Package className="w-4 h-4 text-honey-dark" />
+   964→            فهرست محصولات
+   965→          </CardTitle>
+   966→          <CardDescription className="text-xs">
+   967→            {filtered.length === products.length
+   968→              ? `نمایش همه ${toPersianDigits(products.length)} محصول`
+   969→              : `${toPersianDigits(filtered.length)} محصول یافت شد`}
+   970→          </CardDescription>
+   971→        </CardHeader>
+   972→        <CardContent className="p-0">
+   973→          {filtered.length === 0 ? (
+   974→            <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+   975→              <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
+   976→                <Package className="w-8 h-8 text-muted-foreground" />
+   977→              </div>
+   978→              <p className="text-muted-foreground text-sm">
+   979→                {products.length === 0
+   980→                  ? "هنوز محصولی تعریف نشده است."
+   981→                  : "محصولی با این فیلترها پیدا نشد."}
+   982→              </p>
+   983→              {products.length === 0 && (
+   984→                <Button
+   985→                  onClick={openCreate}
+   986→                  className="bg-honey-gradient text-primary-foreground"
+   987→                >
+   988→                  <Plus className="w-4 h-4 ml-1" />
+   989→                  افزودن اولین محصول
+   990→                </Button>
+   991→              )}
+   992→            </div>
+   993→          ) : (
+   994→            <>
+   995→              {/* Desktop table */}
+   996→              <div className="hidden md:block">
+   997→                <Table>
+   998→                  <TableHeader>
+   999→                    <TableRow>
+  1000→                      <TableHead className="w-14">تصویر</TableHead>
+  1001→                      <TableHead>نام</TableHead>
+  1002→                      <TableHead>اسلاگ</TableHead>
+  1003→                      <TableHead>قیمت مشتری/کیلو</TableHead>
+  1004→                      <TableHead>قیمت نماینده/کیلو</TableHead>
+  1005→                      <TableHead>موجودی</TableHead>
+  1006→                      <TableHead className="text-center">ویژه</TableHead>
+  1007→                      <TableHead className="text-left">عملیات</TableHead>
+  1008→                    </TableRow>
+  1009→                  </TableHeader>
+  1010→                  <TableBody>
+  1011→                    {filtered.map((p) => (
+  1012→                      <TableRow key={p.id}>
+  1013→                        <TableCell>
+  1014→                          <div className="w-10 h-10 rounded-lg overflow-hidden bg-honey-light/30 flex items-center justify-center shrink-0">
+  1015→                            {p.image ? (
+  1016→                              <img
+  1017→                                src={p.image}
+  1018→                                alt={p.name}
+  1019→                                className="w-full h-full object-cover"
+  1020→                              />
+  1021→                            ) : (
+  1022→                              <Package className="w-5 h-5 text-honey-dark/40" />
+  1023→                            )}
+  1024→                          </div>
+  1025→                        </TableCell>
+  1026→                        <TableCell>
+  1027→                          <p className="font-bold text-foreground">
+  1028→                            {p.name}
+  1029→                          </p>
+  1030→                          {p.origin && (
+  1031→                            <p className="text-[11px] text-muted-foreground">
+  1032→                              {p.origin}
+  1033→                            </p>
+  1034→                          )}
+  1035→                        </TableCell>
+  1036→                        <TableCell dir="ltr" className="text-left text-xs text-muted-foreground">
+  1037→                          {p.slug}
+  1038→                        </TableCell>
+  1039→                        <TableCell className="font-bold whitespace-nowrap">
+  1040→                          {formatToman(p.pricePerKg)}
+  1041→                        </TableCell>
+  1042→                        <TableCell
+  1043→                          className={cn(
+  1044→                            "whitespace-nowrap",
+  1045→                            p.agentPricePerKg > 0
+  1046→                              ? "font-bold text-honey-dark"
+  1047→                              : "text-muted-foreground italic"
+  1048→                          )}
+  1049→                        >
+  1050→                          {p.agentPricePerKg > 0
+  1051→                            ? formatToman(p.agentPricePerKg)
+  1052→                            : "همان مشتری"}
+  1053→                        </TableCell>
+  1054→                        <TableCell>
+  1055→                          <StockEditor
+  1056→                            product={p}
+  1057→                            onSaved={() => router.refresh()}
+  1058→                          />
+  1059→                        </TableCell>
+  1060→                        <TableCell className="text-center">
+  1061→                          {p.featured ? (
+  1062→                            <Badge className="bg-honey-light/40 text-honey-dark border-honey/20">
+  1063→                              <Star className="w-3 h-3 ml-1" />
+  1064→                              ویژه
+  1065→                            </Badge>
+  1066→                          ) : (
+  1067→                            <span className="text-muted-foreground text-xs">
+  1068→                              —
+  1069→                            </span>
+  1070→                          )}
+  1071→                        </TableCell>
+  1072→                        <TableCell>
+  1073→                          <div className="flex items-center justify-end gap-1">
+  1074→                            <Button
+  1075→                              size="icon"
+  1076→                              variant="ghost"
+  1077→                              onClick={() => openEdit(p)}
+  1078→                              className="h-8 w-8 text-honey-dark hover:bg-honey-light/40"
+  1079→                              title="ویرایش"
+  1080→                            >
+  1081→                              <Pencil className="w-4 h-4" />
+  1082→                            </Button>
+  1083→                            <Button
+  1084→                              size="icon"
+  1085→                              variant="ghost"
+  1086→                              onClick={() => setDeleting(p)}
+  1087→                              className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+  1088→                              title="حذف"
+  1089→                            >
+  1090→                              <Trash2 className="w-4 h-4" />
+  1091→                            </Button>
+  1092→                          </div>
+  1093→                        </TableCell>
+  1094→                      </TableRow>
+  1095→                    ))}
+  1096→                  </TableBody>
+  1097→                </Table>
+  1098→              </div>
+  1099→
+  1100→              {/* Mobile card list */}
+  1101→              <div className="md:hidden divide-y">
+  1102→                {filtered.map((p) => (
+  1103→                  <div key={p.id} className="p-4 space-y-3">
+  1104→                    <div className="flex items-start gap-3">
+  1105→                      <div className="w-14 h-14 rounded-lg overflow-hidden bg-honey-light/30 flex items-center justify-center shrink-0">
+  1106→                        {p.image ? (
+  1107→                          <img
+  1108→                            src={p.image}
+  1109→                            alt={p.name}
+  1110→                            className="w-full h-full object-cover"
+  1111→                          />
+  1112→                        ) : (
+  1113→                          <Package className="w-6 h-6 text-honey-dark/40" />
+  1114→                        )}
+  1115→                      </div>
+  1116→                      <div className="flex-1 min-w-0">
+  1117→                        <div className="flex items-center gap-2 flex-wrap">
+  1118→                          <p className="font-bold text-foreground">{p.name}</p>
+  1119→                          {p.featured && (
+  1120→                            <Badge className="bg-honey-light/40 text-honey-dark border-honey/20 text-[10px]">
+  1121→                              <Star className="w-3 h-3 ml-1" />
+  1122→                              ویژه
+  1123→                            </Badge>
+  1124→                          )}
+  1125→                        </div>
+  1126→                        <p
+  1127→                          dir="ltr"
+  1128→                          className="text-[11px] text-muted-foreground text-left"
+  1129→                        >
+  1130→                          {p.slug}
+  1131→                        </p>
+  1132→                        {p.origin && (
+  1133→                          <p className="text-[11px] text-muted-foreground">
+  1134→                            {p.origin}
+  1135→                          </p>
+  1136→                        )}
+  1137→                      </div>
+  1138→                    </div>
+  1139→
+  1140→                    <div className="grid grid-cols-2 gap-2 text-xs">
+  1141→                      <div>
+  1142→                        <p className="text-muted-foreground">قیمت مشتری/کیلو</p>
+  1143→                        <p className="font-bold">
+  1144→                          {formatToman(p.pricePerKg)}
+  1145→                        </p>
+  1146→                      </div>
+  1147→                      <div>
+  1148→                        <p className="text-muted-foreground">
+  1149→                          قیمت نماینده/کیلو
+  1150→                        </p>
+  1151→                        <p
+  1152→                          className={cn(
+  1153→                            "font-bold",
+  1154→                            p.agentPricePerKg > 0
+  1155→                              ? "text-honey-dark"
+  1156→                              : "text-muted-foreground italic"
+  1157→                          )}
+  1158→                        >
+  1159→                          {p.agentPricePerKg > 0
+  1160→                            ? formatToman(p.agentPricePerKg)
+  1161→                            : "همان مشتری"}
+  1162→                        </p>
+  1163→                      </div>
+  1164→                    </div>
+  1165→
+  1166→                    <div className="flex items-center justify-between gap-2">
+  1167→                      <div>
+  1168→                        <p className="text-[11px] text-muted-foreground mb-1">
+  1169→                          موجودی
+  1170→                        </p>
+  1171→                        <StockEditor
+  1172→                          product={p}
+  1173→                          onSaved={() => router.refresh()}
+  1174→                        />
+  1175→                      </div>
+  1176→                      <div className="flex items-center gap-1">
+  1177→                        <Button
+  1178→                          size="icon"
+  1179→                          variant="ghost"
+  1180→                          onClick={() => openEdit(p)}
+  1181→                          className="h-8 w-8 text-honey-dark hover:bg-honey-light/40"
+  1182→                          title="ویرایش"
+  1183→                        >
+  1184→                          <Pencil className="w-4 h-4" />
+  1185→                        </Button>
+  1186→                        <Button
+  1187→                          size="icon"
+  1188→                          variant="ghost"
+  1189→                          onClick={() => setDeleting(p)}
+  1190→                          className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+  1191→                          title="حذف"
+  1192→                        >
+  1193→                          <Trash2 className="w-4 h-4" />
+  1194→                        </Button>
+  1195→                      </div>
+  1196→                    </div>
+  1197→                  </div>
+  1198→                ))}
+  1199→              </div>
+  1200→            </>
+  1201→          )}
+  1202→        </CardContent>
+  1203→      </Card>
+  1204→
+  1205→      {/* Last updated info */}
+  1206→      <p className="text-[11px] text-muted-foreground text-center">
+  1207→        آخرین به‌روزرسانی:{" "}
+  1208→        {products[0]?.updatedAt
+  1209→          ? formatJalaliDateTime(products[0].updatedAt)
+  1210→          : "—"}
+  1211→        {products.length > 1 && (
+  1212→          <span className="mr-2">
+  1213→            · نمایش {toPersianDigits(filtered.length)} از{" "}
+  1214→            {toPersianDigits(products.length)} محصول
+  1215→          </span>
+  1216→        )}
+  1217→      </p>
+  1218→
+  1219→      {/* Create/Edit dialog */}
+  1220→      <ProductFormDialog
+  1221→        open={formOpen}
+  1222→        onOpenChange={setFormOpen}
+  1223→        product={editing}
+  1224→      />
+  1225→
+  1226→      {/* Delete dialog */}
+  1227→      <DeleteDialog
+  1228→        product={deleting}
+  1229→        open={deleting !== null}
+  1230→        onOpenChange={(v) => !v && setDeleting(null)}
+  1231→        onDone={() => router.refresh()}
+  1232→      />
+  1233→    </div>
+  1234→  );
+  1235→}
+  1236→
+  1237→// ── Small stat tile for the summary row ──────────────────────────────────
+  1238→function StatTile({
+  1239→  icon,
+  1240→  label,
+  1241→  value,
+  1242→  tint,
+  1243→}: {
+  1244→  icon: React.ReactNode;
+  1245→  label: string;
+  1246→  value: string;
+  1247→  tint: "honey" | "warn" | "danger" | "neutral";
+  1248→}) {
+  1249→  const tintClass =
+  1250→    tint === "honey"
+  1251→      ? "bg-honey-light/30 border-honey/30 text-honey-dark"
+  1252→      : tint === "warn"
+  1253→      ? "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-200"
+  1254→      : tint === "danger"
+  1255→      ? "bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-300"
+  1256→      : "bg-muted/30 border-border text-muted-foreground";
+  1257→  return (
+  1258→    <div
+  1259→      className={cn(
+  1260→        "rounded-xl border p-3 flex items-center gap-3",
+  1261→        tintClass
+  1262→      )}
+  1263→    >
+  1264→      <div className="w-9 h-9 rounded-lg bg-background/60 flex items-center justify-center shrink-0">
+  1265→        {icon}
+  1266→      </div>
+  1267→      <div className="min-w-0">
+  1268→        <p className="text-[11px] truncate">{label}</p>
+  1269→        <p className="text-lg font-extrabold leading-tight">{value}</p>
+  1270→      </div>
+  1271→    </div>
+  1272→  );
+  1273→}
+  1274→

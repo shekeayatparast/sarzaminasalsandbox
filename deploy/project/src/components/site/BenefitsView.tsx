@@ -11,6 +11,12 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import {
+  SectionHeading,
+  Reveal,
+  StaggerGrid,
+  StaggerItem,
+} from "./shared-ui";
+import {
   Beaker,
   Heart,
   Star,
@@ -26,31 +32,37 @@ import {
 const GENERAL_BENEFITS = [
   {
     icon: ShieldPlus,
+    tone: "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400",
     title: "تقویت سیستم ایمنی",
     desc: "عسل دارای خواص ضدباکتریایی و ضدالتهابی است که به تقویت سیستم ایمنی بدن کمک می‌کند و در برابر بیماری‌ها از شما محافظت می‌کند.",
   },
   {
     icon: Zap,
+    tone: "bg-honey-light/40 text-honey-dark dark:bg-honey-light/20 dark:text-honey-light",
     title: "افزایش انرژی",
-    desc: "منبع طبیعی قود و کربوهیدرات، انرژی سریع و پایدار برای شروع روز یا قبل از ورزش بدون افت ناگهانی قند خون.",
+    desc: "منبع طبیعی قند و کربوهیدرات، انرژی سریع و پایدار برای شروع روز یا قبل از ورزش بدون افت ناگهانی قند خون.",
   },
   {
     icon: Heart,
+    tone: "bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300",
     title: "سلامت قلب",
     desc: "آنتی‌اکسیدان‌های موجود در عسل به کاهش کلسترول و بهبود سلامت قلب و عروق کمک می‌کنند.",
   },
   {
     icon: Brain,
+    tone: "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
     title: "بهبود حافظه",
     desc: "مصرف منظم عسل به بهبود عملکرد مغز، تمرکز و حافظه کمک می‌کند، به‌ویژه در کودکان و سالمندان.",
   },
   {
     icon: Flower2,
+    tone: "bg-honey-light/30 text-honey-dark dark:bg-honey-light/15 dark:text-honey-light",
     title: "ضدالتهاب طبیعی",
     desc: "خواص ضدالتهابی عسل در تسکین گلودرد، سرفه و التهاب‌های داخلی بدن مؤثر است.",
   },
   {
     icon: Beaker,
+    tone: "bg-accent text-accent-foreground",
     title: "سرشار از آنتی‌اکسیدان",
     desc: "حاوی ترکیبات فنلی و آنتی‌اکسیدان که با رادیکال‌های آزاد مبارزه کرده و از سلول‌ها محافظت می‌کنند.",
   },
@@ -59,7 +71,7 @@ const GENERAL_BENEFITS = [
 const HONEY_TYPES = [
   {
     name: "عسل گون",
-    color: "bg-honey-light/30",
+    header: "from-honey-light/50 to-honey-light/10 dark:from-honey-light/25 dark:to-transparent",
     benefits: [
       "تقویت سیستم ایمنی بدن",
       "افزایش انرژی و رفع خستگی",
@@ -70,7 +82,7 @@ const HONEY_TYPES = [
   },
   {
     name: "عسل کنار",
-    color: "bg-honey/20",
+    header: "from-honey/35 to-honey/10 dark:from-honey/30 dark:to-transparent",
     benefits: [
       "خواص درمانی فراوان",
       "تقویت قوای جنسی",
@@ -81,7 +93,7 @@ const HONEY_TYPES = [
   },
   {
     name: "عسل چند گیاه",
-    color: "bg-honey-light/25",
+    header: "from-honey-light/40 to-honey/10 dark:from-honey-light/20 dark:to-transparent",
     benefits: [
       "ترکیب خواص چندین گیاه دارویی",
       "تقویت عمومی بدن",
@@ -119,197 +131,222 @@ const FAQ = [
   },
 ];
 
+const CONSUME_TIPS = [
+  "مصرف ۱ تا ۲ قاشق غذاخوری در روز کافی است",
+  "بهترین مصرف ناشتا صبح‌ها است",
+  "عسل را با آب ولرم (نه داغ) مصرف کنید",
+  "از دادن عسل به نوزادان زیر یک سال خودداری کنید",
+  "برای شیرین کردن نوشیدنی‌ها به جای قند استفاده کنید",
+  "نگهداری در ظرف دربسته و دور از نور خورشید",
+];
+
 export function BenefitsView() {
   const { navigate } = useNav();
 
   return (
     <div>
-      {/* Hero */}
-      <section className="relative overflow-hidden bg-honey-dark text-primary-foreground py-16 md:py-24">
+      {/* ── Hero ──────────────────────────────────────────────── */}
+      <section className="relative overflow-hidden bg-honey-dark py-16 text-primary-foreground md:py-24" aria-label="خواص عسل">
         <div className="absolute inset-0 opacity-20">
           <img
             src="/images/honeycomb-texture.png"
             alt=""
-            className="w-full h-full object-cover"
+            className="h-full w-full object-cover"
           />
         </div>
+        <div
+          aria-hidden="true"
+          className="bg-hexagon-pattern-strong absolute inset-0 opacity-50"
+          style={{
+            maskImage: "linear-gradient(to bottom, black 15%, transparent 85%)",
+            WebkitMaskImage:
+              "linear-gradient(to bottom, black 15%, transparent 85%)",
+          }}
+        />
         <div className="relative container mx-auto px-4 text-center">
-          <Badge className="bg-honey-light/30 text-primary-foreground border-0 mb-4">
-            خواص عسل
-          </Badge>
-          <h1 className="text-4xl md:text-5xl font-extrabold mb-4 drop-shadow">
-            شگفتی‌های طبیعی عسل
-          </h1>
-          <p className="text-lg text-primary-foreground/90 max-w-2xl mx-auto leading-relaxed">
-            عسل طبیعی یکی از ارزشمندترین هدایای طبیعت است. با خواص درمانی و
-            غذایی بی‌نظیر، قرن‌هاست که در سلامتی انسان نقش حیاتی دارد.
-          </p>
-        </div>
-      </section>
-
-      {/* General benefits */}
-      <section className="container mx-auto px-4 py-14 md:py-20">
-        <div className="text-center mb-10">
-          <Badge className="bg-accent text-accent-foreground border-0 mb-3">
-            خواص عمومی
-          </Badge>
-          <h2 className="text-3xl md:text-4xl font-extrabold text-honey-dark mb-3">
-            چرا عسل طبیعی مصرف کنیم؟
-          </h2>
-          <p className="text-muted-foreground max-w-2xl mx-auto">
-            عسل طبیعی سرشار از خواصی است که به سلامتی شما کمک می‌کند.
-          </p>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {GENERAL_BENEFITS.map((b) => (
-            <Card
-              key={b.title}
-              className="p-5 hover:shadow-lg transition-all hover:-translate-y-1 border-border/60"
-            >
-              <div className="w-12 h-12 rounded-xl bg-honey-gradient flex items-center justify-center mb-4">
-                <b.icon className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <h3 className="font-bold text-lg mb-2 text-honey-dark">
-                {b.title}
-              </h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">
-                {b.desc}
-              </p>
-            </Card>
-          ))}
-        </div>
-      </section>
-
-      {/* By honey type */}
-      <section className="bg-honey-light/15 py-14 md:py-20">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-10">
-            <Badge className="bg-honey-gradient text-primary-foreground border-0 mb-3">
-              خواص هر نوع عسل
+          <Reveal from="right">
+            <Badge className="mb-4 border-0 bg-honey-light/30 text-primary-foreground">
+              خواص عسل
             </Badge>
-            <h2 className="text-3xl md:text-4xl font-extrabold text-honey-dark mb-3">
-              خواص اختصاصی هر عسل
-            </h2>
-            <p className="text-muted-foreground max-w-2xl mx-auto">
-              هر نوع عسل بسته به گیاه منشأ، خواص منحصربه‌فردی دارد.
+            <h1 className="mb-4 text-4xl font-extrabold drop-shadow md:text-5xl">
+              شگفتی‌های طبیعی عسل
+            </h1>
+            <p className="mx-auto max-w-2xl text-lg leading-relaxed text-primary-foreground/90">
+              عسل طبیعی یکی از ارزشمندترین هدایای طبیعت است. با خواص درمانی و
+              غذایی بی‌نظیر، قرن‌هاست که در سلامتی انسان نقش حیاتی دارد.
             </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {HONEY_TYPES.map((h) => (
-              <Card
-                key={h.name}
-                className={`p-6 ${h.color} border-honey/30 hover:shadow-lg transition-shadow`}
-              >
-                <h3 className="font-extrabold text-xl text-honey-dark mb-4">
-                  {h.name}
-                </h3>
-                <ul className="space-y-2.5">
-                  {h.benefits.map((b) => (
-                    <li key={b} className="flex items-start gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-honey-dark shrink-0 mt-0.5" />
-                      <span className="text-sm text-foreground/90">
-                        {b}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
-            ))}
-          </div>
+          </Reveal>
         </div>
       </section>
 
-      {/* How to consume */}
-      <section className="container mx-auto px-4 py-14 md:py-20">
-        <div className="grid md:grid-cols-2 gap-8 md:gap-12 items-center">
-          <div>
-            <Badge className="bg-accent text-accent-foreground border-0 mb-3">
+      {/* ── General benefits ──────────────────────────────────── */}
+      <section className="container mx-auto px-4 py-16 md:py-24" aria-label="خواص عمومی عسل">
+        <SectionHeading
+          badge="خواص عمومی"
+          title="چرا عسل طبیعی مصرف کنیم؟"
+          description="عسل طبیعی سرشار از خواصی است که به سلامتی شما کمک می‌کند."
+        />
+        <StaggerGrid className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {GENERAL_BENEFITS.map((b) => (
+            <StaggerItem key={b.title} className="h-full">
+              <Card className="honey-glow-hover h-full border-border/60 bg-card p-5 hover:-translate-y-1 hover:border-honey/40">
+                <div
+                  className={`mb-4 flex h-12 w-12 items-center justify-center rounded-xl ${b.tone}`}
+                >
+                  <b.icon className="h-6 w-6" aria-hidden="true" />
+                </div>
+                <h3 className="mb-2 text-lg font-bold text-honey-dark">
+                  {b.title}
+                </h3>
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {b.desc}
+                </p>
+              </Card>
+            </StaggerItem>
+          ))}
+        </StaggerGrid>
+      </section>
+
+      {/* ── By honey type ─────────────────────────────────────── */}
+      <section className="relative overflow-hidden bg-honey-light/15 py-16 md:py-24 dark:bg-honey-light/5" aria-label="خواص انواع عسل">
+        <div
+          aria-hidden="true"
+          className="bg-hexagon-pattern absolute inset-0 opacity-50"
+        />
+        <div className="relative container mx-auto px-4">
+          <SectionHeading
+            badge="خواص هر نوع عسل"
+            title="خواص اختصاصی هر عسل"
+            description="هر نوع عسل بسته به گیاه منشأ، خواص منحصربه‌فردی دارد."
+          />
+          <StaggerGrid className="grid grid-cols-1 gap-5 md:grid-cols-3">
+            {HONEY_TYPES.map((h) => (
+              <StaggerItem key={h.name} className="h-full">
+                <Card className="honey-glow-hover flex h-full flex-col overflow-hidden border-honey/30 bg-card p-0 hover:-translate-y-1">
+                  <div
+                    className={`bg-gradient-to-l ${h.header} px-6 py-5`}
+                  >
+                    <h3 className="text-xl font-extrabold text-honey-dark">
+                      {h.name}
+                    </h3>
+                  </div>
+                  <ul className="flex-1 space-y-2.5 p-6">
+                    {h.benefits.map((b) => (
+                      <li key={b} className="flex items-start gap-2">
+                        <CheckCircle2
+                          className="mt-0.5 h-4 w-4 shrink-0 text-honey-dark"
+                          aria-hidden="true"
+                        />
+                        <span className="text-sm text-foreground/90">{b}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              </StaggerItem>
+            ))}
+          </StaggerGrid>
+        </div>
+      </section>
+
+      {/* ── How to consume ────────────────────────────────────── */}
+      <section className="container mx-auto px-4 py-16 md:py-24" aria-label="راهنمای مصرف">
+        <div className="grid items-center gap-8 md:grid-cols-2 md:gap-12">
+          <Reveal from="right">
+            <Badge className="mb-3 border-0 bg-accent text-accent-foreground">
               راهنمای مصرف
             </Badge>
-            <h2 className="text-3xl md:text-4xl font-extrabold text-honey-dark mb-4">
+            <h2 className="mb-6 text-3xl font-extrabold text-honey-gradient md:text-4xl">
               نکات مصرف عسل طبیعی
             </h2>
             <ul className="space-y-3">
-              {[
-                "مصرف ۱ تا ۲ قاشق غذاخوری در روز کافی است",
-                "بهترین مصرف ناشتا صبح‌ها است",
-                "عسل را با آب ولرم (نه داغ) مصرف کنید",
-                "از دادن عسل به نوزادان زیر یک سال خودداری کنید",
-                "برای شیرین کردن نوشیدنی‌ها به جای قند استفاده کنید",
-                "نگهداری در ظرف دربسته و دور از نور خورشید",
-              ].map((t) => (
-                <li key={t} className="flex items-start gap-3">
-                  <Droplet className="w-5 h-5 text-honey fill-honey shrink-0 mt-0.5" />
+              {CONSUME_TIPS.map((t) => (
+                <li
+                  key={t}
+                  className="flex items-start gap-3 rounded-xl px-2 py-1.5 transition-colors hover:bg-honey-light/15"
+                >
+                  <Droplet
+                    className="mt-0.5 h-5 w-5 shrink-0 fill-honey text-honey"
+                    aria-hidden="true"
+                  />
                   <span className="text-foreground/90">{t}</span>
                 </li>
               ))}
             </ul>
-          </div>
-          <Card className="p-8 bg-honey-light/20 border-honey/30">
-            <Star className="w-12 h-12 text-honey-dark mb-4" />
-            <h3 className="font-extrabold text-xl text-honey-dark mb-3">
-              یک توصیه ویژه
-            </h3>
-            <p className="text-muted-foreground leading-relaxed mb-3">
-              برای دریافت بیشترین خواص عسل، آن را با آب ولرم و کمی آبلیموی
-              تازه ناشتا مصرف کنید. این ترکیب به پاکسازی بدن و تقویت سیستم
-              ایمنی کمک شایانی می‌کند.
-            </p>
-            <p className="text-muted-foreground leading-relaxed">
-              همچنین می‌توانید عسل را با دارچین، زنجبیل یا زعفران ترکیب
-              کنید تا خواص درمانی آن چند برابر شود.
-            </p>
-          </Card>
+          </Reveal>
+          <Reveal from="left">
+            <Card className="honey-glow border-honey/30 bg-honey-light/20 p-8">
+              <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-honey-gradient shadow-md">
+                <Star
+                  className="h-7 w-7 text-primary-foreground"
+                  aria-hidden="true"
+                />
+              </span>
+              <h3 className="mb-3 text-xl font-extrabold text-honey-dark">
+                یک توصیه ویژه
+              </h3>
+              <p className="mb-3 leading-relaxed text-muted-foreground">
+                برای دریافت بیشترین خواص عسل، آن را با آب ولرم و کمی آبلیموی
+                تازه ناشتا مصرف کنید. این ترکیب به پاکسازی بدن و تقویت سیستم
+                ایمنی کمک شایانی می‌کند.
+              </p>
+              <p className="leading-relaxed text-muted-foreground">
+                همچنین می‌توانید عسل را با دارچین، زنجبیل یا زعفران ترکیب
+                کنید تا خواص درمانی آن چند برابر شود.
+              </p>
+            </Card>
+          </Reveal>
         </div>
       </section>
 
-      {/* FAQ */}
-      <section className="bg-honey-light/15 py-14 md:py-20">
-        <div className="container mx-auto px-4 max-w-3xl">
-          <div className="text-center mb-10">
-            <Badge className="bg-accent text-accent-foreground border-0 mb-3">
-              سوالات متداول
-            </Badge>
-            <h2 className="text-3xl md:text-4xl font-extrabold text-honey-dark mb-3">
-              پرسش‌های شما درباره عسل
-            </h2>
-          </div>
-          <Card className="p-2 md:p-4">
-            <Accordion type="single" collapsible className="w-full">
-              {FAQ.map((item, i) => (
-                <AccordionItem
-                  key={i}
-                  value={`item-${i}`}
-                  className="border-border/60"
-                >
-                  <AccordionTrigger className="text-right font-bold text-base md:text-lg text-honey-dark hover:no-underline px-3">
-                    {item.q}
-                  </AccordionTrigger>
-                  <AccordionContent className="text-muted-foreground leading-relaxed px-3 text-sm md:text-base">
-                    {item.a}
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
-            </Accordion>
-          </Card>
+      {/* ── FAQ ───────────────────────────────────────────────── */}
+      <section className="relative overflow-hidden bg-honey-light/15 py-16 md:py-24 dark:bg-honey-light/5" aria-label="سوالات متداول">
+        <div
+          aria-hidden="true"
+          className="bg-hexagon-pattern absolute inset-0 opacity-40"
+        />
+        <div className="relative container mx-auto max-w-3xl px-4">
+          <SectionHeading badge="سوالات متداول" title="پرسش‌های شما درباره عسل" />
+          <Reveal from="up">
+            <Card className="border-border/60 bg-card p-2 shadow-sm md:p-4">
+              <Accordion type="single" collapsible className="w-full">
+                {FAQ.map((item, i) => (
+                  <AccordionItem
+                    key={i}
+                    value={`item-${i}`}
+                    className="border-border/60"
+                  >
+                    <AccordionTrigger className="px-3 text-right text-base font-bold text-honey-dark hover:no-underline md:text-lg">
+                      {item.q}
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 text-sm leading-relaxed text-muted-foreground md:text-base">
+                      {item.a}
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            </Card>
+          </Reveal>
         </div>
       </section>
 
-      {/* CTA */}
-      <section className="container mx-auto px-4 py-14 text-center">
-        <h2 className="text-2xl md:text-3xl font-extrabold text-honey-dark mb-4">
-          عسل طبیعی را همین حالا سفارش دهید
-        </h2>
-        <p className="text-muted-foreground mb-6 max-w-xl mx-auto">
-          از خواص بی‌نظیر عسل طبیعی بهره‌مند شوید.
-        </p>
-        <Button
-          onClick={() => navigate("products")}
-          className="bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-lg h-13 px-8 text-base font-bold py-3.5"
-        >
-          مشاهده محصولات
-          <ArrowLeft className="w-5 h-5 mr-1" />
-        </Button>
+      {/* ── CTA ───────────────────────────────────────────────── */}
+      <section className="container mx-auto px-4 py-16 text-center" aria-label="دعوت به خرید">
+        <Reveal from="scale">
+          <h2 className="mb-4 text-2xl font-extrabold text-honey-dark md:text-3xl">
+            عسل طبیعی را همین حالا سفارش دهید
+          </h2>
+          <p className="mx-auto mb-6 max-w-xl text-muted-foreground">
+            از خواص بی‌نظیر عسل طبیعی بهره‌مند شوید.
+          </p>
+          <Button
+            onClick={() => navigate("products")}
+            aria-label="مشاهده محصولات و ثبت سفارش"
+            className="honey-glow h-14 bg-honey-gradient px-8 py-4 text-base font-bold text-primary-foreground transition-transform duration-300 hover:scale-[1.03] motion-reduce:hover:scale-100"
+          >
+            مشاهده محصولات
+            <ArrowLeft className="mr-1 h-5 w-5" aria-hidden="true" />
+          </Button>
+        </Reveal>
       </section>
     </div>
   );

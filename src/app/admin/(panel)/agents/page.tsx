@@ -18,7 +18,6 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { AgentActionsButtons } from "@/components/admin/AgentActionsButtons";
 import { AgentsFilters } from "@/components/admin/AgentsFilters";
@@ -74,7 +73,6 @@ export default async function AdminAgentsPage({ searchParams }: PageProps) {
         province: true,
         city: true,
         status: true,
-        commissionRate: true,
         totalSales: true,
         totalOrders: true,
         lastLoginAt: true,
@@ -163,7 +161,6 @@ export default async function AdminAgentsPage({ searchParams }: PageProps) {
                       <TableHead>وضعیت</TableHead>
                       <TableHead>سفارش</TableHead>
                       <TableHead>فروش کل</TableHead>
-                      <TableHead>پورسانت</TableHead>
                       <TableHead>آخرین ورود</TableHead>
                       <TableHead className="text-left">عملیات</TableHead>
                     </TableRow>
@@ -197,11 +194,6 @@ export default async function AdminAgentsPage({ searchParams }: PageProps) {
                         </TableCell>
                         <TableCell className="text-sm font-bold">
                           {formatToman(a.totalSales)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge className="bg-honey-light/40 text-honey-dark border-honey/20">
-                            {toPersianDigits(a.commissionRate)}٪
-                          </Badge>
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {a.lastLoginAt
@@ -256,12 +248,6 @@ export default async function AdminAgentsPage({ searchParams }: PageProps) {
                         سفارش‌ها:{" "}
                         <span className="text-foreground">
                           {toPersianDigits(a.totalOrders)}
-                        </span>
-                      </p>
-                      <p>
-                        پورسانت:{" "}
-                        <span className="text-foreground">
-                          {toPersianDigits(a.commissionRate)}٪
                         </span>
                       </p>
                       <p className="col-span-2">

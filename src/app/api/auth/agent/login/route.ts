@@ -107,7 +107,6 @@ export async function POST(req: NextRequest) {
         city: agent.city,
         address: agent.address,
         nationalId: agent.nationalId,
-        commissionRate: agent.commissionRate,
         balance: agent.balance,
         totalSales: agent.totalSales,
         totalOrders: agent.totalOrders,

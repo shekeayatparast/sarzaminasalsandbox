@@ -1,18 +1,21 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════
 #  سرزمین عسل — Honey Land E-commerce + Telegram Bot
-#  Full Production Installer
+#  Full Production Installer (3X-UI friendly edition)
 #
 #  This script:
 #    1. Installs all system dependencies (Bun, Caddy, build tools)
-#    2. Copies the project to /opt/sarzemine-asal
-#    3. Installs npm dependencies, builds the site, sets up the database
-#    4. Configures the Telegram bot with your token
-#    5. Asks for a domain — if provided, sets up Caddy reverse proxy
-#       with automatic HTTPS (Let's Encrypt). If not, uses localhost.
-#    6. Installs systemd services for auto-start on boot
-#    7. Installs a health monitor with Telegram alerts
-#    8. Starts everything and verifies health
+#    2. Detects existing services (3X-UI / x-ui / xray) and listening ports
+#       so the website NEVER conflicts with your VPN panel
+#    3. Copies the project to /opt/sarzemine-asal
+#    4. Installs npm dependencies, builds the site, sets up the database
+#    5. Configures the Telegram bot with your token
+#    6. Asks for a domain — if provided, sets up Caddy reverse proxy
+#       with automatic HTTPS. If ports 80/443 are taken (e.g. by 3X-UI),
+#       offers safe alternatives (custom port / HTTP-only).
+#    7. Installs systemd services for auto-start on boot
+#    8. Installs a health monitor with Telegram alerts
+#    9. Configures the firewall WITHOUT ever blocking your 3X-UI ports
 #
 #  Usage:  sudo bash setup.sh
 #  Re-run: sudo bash setup.sh   (safe — detects existing install)
@@ -35,7 +38,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_SRC="$SCRIPT_DIR/project"
 
 # Default bot config — empty by default. User MUST enter their own values.
-# This avoids leaking secrets into version control.
 DEFAULT_BOT_TOKEN=""
 DEFAULT_ADMIN_ID=""
 
@@ -54,6 +56,9 @@ die() { err "$*"; exit 1; }
 # Check if a command exists
 has() { command -v "$1" &>/dev/null; }
 
+# Check whether a TCP port is already listening
+port_busy() { ss -tln 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
+
 # ── Error trap ───────────────────────────────────────────────────────
 on_error() {
   local line=$1
@@ -66,7 +71,7 @@ trap 'on_error $LINENO' ERR
 # ═══════════════════════════════════════════════════════════════════════
 # STEP 1: Pre-flight checks
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 1/8: Pre-flight checks"
+step "Step 1/9: Pre-flight checks"
 
 # Must run as root (or with sudo)
 if [[ $EUID -ne 0 ]]; then
@@ -85,6 +90,39 @@ ok "OS: $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || echo "Linux")"
 if ! has git; then
   info "Installing git..."
   apt-get install -y -qq git >/dev/null 2>&1 || true
+fi
+
+# ── 3X-UI / VPN panel coexistence detection ─────────────────────────
+VPN_PANEL_DETECTED=false
+VPN_SERVICES=""
+for svc in 3x-ui x-ui xray marzbadns marznastin; do
+  if systemctl list-unit-files 2>/dev/null | grep -q "^${svc}.service" || \
+     systemctl is-active --quiet "$svc" 2>/dev/null; then
+    VPN_PANEL_DETECTED=true
+    VPN_SERVICES="$VPN_SERVICES $svc"
+  fi
+done
+
+BUSY_PORTS=""
+if command -v ss &>/dev/null; then
+  BUSY_PORTS=$(ss -tln 2>/dev/null | awk 'NR>1 {print $4}' | \
+    grep -oE '[0-9]+$' | sort -un | tr '\n' ' ')
+fi
+
+if [[ "$VPN_PANEL_DETECTED" == "true" ]]; then
+  echo ""
+  echo -e "${GREEN}${BOLD}🛡  VPN panel detected on this server:${NC} ${VPN_SERVICES}"
+  echo -e "  This installer is 3X-UI aware:"
+  echo -e "   • It will NOT touch your panel, xray inbounds, or their ports"
+  echo -e "   • It will NOT enable strict firewall rules that could block VPN ports"
+  echo -e "   • It will pick free ports for the website & bot automatically"
+  echo ""
+  echo -e "  Ports currently listening on this server:"
+  echo -e "  ${CYAN}${BUSY_PORTS:-none detected}${NC}"
+  echo ""
+else
+  info "No 3X-UI/x-ui/xray services detected — standard installation."
+  [[ -n "$BUSY_PORTS" ]] && info "Currently listening ports: $BUSY_PORTS"
 fi
 
 # Two deployment modes:
@@ -137,7 +175,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════
 # STEP 2: Interactive configuration
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 2/8: Configuration"
+step "Step 2/9: Configuration"
 
 echo ""
 echo -e "${BOLD}Please answer the following questions:${NC}"
@@ -178,31 +216,167 @@ while true; do
 done
 ok "Admin ID: $ADMIN_ID"
 
-# Domain
+# ── Site port selection (3X-UI aware) ────────────────────────────────
 echo ""
-echo -e "${BOLD}Domain name (optional):${NC}"
+echo -e "${BOLD}Website internal port${NC} (the Next.js server)"
+if port_busy "$SITE_PORT"; then
+  warn "Default port $SITE_PORT is already in use on this server."
+  while true; do
+    read -rp "$(echo -e "${CYAN} Choose a free port for the website [3001-3010, 8080]: ${NC}")" SITE_PORT_INPUT
+    SITE_PORT="${SITE_PORT_INPUT:-$SITE_PORT}"
+    if ! [[ "$SITE_PORT" =~ ^[0-9]+$ ]]; then
+      err "Port must be numeric."
+      continue
+    fi
+    if port_busy "$SITE_PORT"; then
+      err "Port $SITE_PORT is also busy. Try another."
+      continue
+    fi
+    ok "Website will use port $SITE_PORT"
+    break
+  done
+else
+  ok "Website internal port: $SITE_PORT (free)"
+fi
+
+# ── Bot port selection ───────────────────────────────────────────────
+if port_busy "$BOT_PORT"; then
+  warn "Bot port $BOT_PORT is already in use."
+  while true; do
+    read -rp "$(echo -e "${CYAN} Choose a free port for the bot service [3004-3010]: ${NC}")" BOT_PORT_INPUT
+    BOT_PORT="${BOT_PORT_INPUT:-$BOT_PORT}"
+    if ! [[ "$BOT_PORT" =~ ^[0-9]+$ ]] || port_busy "$BOT_PORT"; then
+      err "Port busy or invalid. Try another."
+      continue
+    fi
+    ok "Bot will use port $BOT_PORT"
+    break
+  done
+else
+  ok "Bot internal port: $BOT_PORT (free)"
+fi
+
+# Domain / public access mode
+echo ""
+echo -e "${BOLD}Public access — domain (optional):${NC}"
 echo -e "  If you have a domain (e.g. honey.example.com), enter it now."
 echo -e "  Caddy will automatically obtain a free SSL certificate (Let's Encrypt)."
-echo -e "  Leave empty to use http://localhost only."
+if [[ "$VPN_PANEL_DETECTED" == "true" ]]; then
+  echo -e "  ${YELLOW}3X-UI detected:${NC} if your panel or xray inbounds already use ports"
+  echo -e "  80/443, the installer will detect it and suggest safe alternatives."
+fi
+echo -e "  Leave empty to serve the site directly on a custom port (HTTP)."
 echo ""
 read -rp "$(echo -e "${CYAN} Domain (optional): ${NC}")" DOMAIN
 DOMAIN="${DOMAIN:-}"
-if [[ -n "$DOMAIN" ]]; then
-  ok "Domain: $DOMAIN (HTTPS will be configured)"
-else
-  ok "No domain — using localhost (http only)"
+
+HTTP80_FREE=true
+HTTPS443_FREE=true
+port_busy 80  && HTTP80_FREE=false
+port_busy 443 && HTTPS443_FREE=false
+# Caddy itself listening is fine (we manage it) — treat as free if it's caddy
+if ! $HTTP80_FREE; then
+  if ss -tlnp 2>/dev/null | grep -E '[:.]80 ' | grep -q caddy; then HTTP80_FREE=true; fi
+fi
+if ! $HTTPS443_FREE; then
+  if ss -tlnp 2>/dev/null | grep -E '[:.]443 ' | grep -q caddy; then HTTPS443_FREE=true; fi
 fi
 
-# Email for Let's Encrypt (required if domain provided)
-LE_EMAIL=""
+# Public access mode resolution:
+#   mode=https-domain   → Caddy serves https://DOMAIN on 443 (needs 80+443 free)
+#   mode=https-altport  → Caddy serves https://DOMAIN:CUSTOM_HTTPS_PORT (needs 80 free for cert)
+#   mode=http-direct    → Next.js exposed directly on SITE_PORT (or custom public port)
+CADDY_SITE_ADDR=""
+PUBLIC_PORT="$SITE_PORT"
+
 if [[ -n "$DOMAIN" ]]; then
-  echo ""
-  echo -e "${BOLD}Email for Let's Encrypt certificate notifications:${NC}"
-  echo -e "  (used only for certificate expiry warnings — required by Let's Encrypt)"
-  read -rp "$(echo -e "${CYAN} Email: ${NC}")" LE_EMAIL
-  if [[ -z "$LE_EMAIL" ]]; then
-    warn "No email provided — Caddy will use a default. You may not receive expiry warnings."
+  if $HTTP80_FREE && $HTTPS443_FREE; then
+    CADDY_SITE_ADDR="$DOMAIN"
+    ok "Domain: $DOMAIN (HTTPS on 443 will be configured)"
+  elif $HTTP80_FREE && ! $HTTPS443_FREE; then
+    warn "Port 443 is busy (probably 3X-UI xray inbound or another panel)."
+    echo -e "  Option A: HTTPS on an alternate port (e.g. 8443) — cert still auto-issued via port 80"
+    echo -e "  Option B: HTTP only on port 80 (no SSL)"
+    echo -e "  Option C: Enter a different domain/port setup manually"
+    read -rp "$(echo -e "${CYAN} Choose [A/B/C, default=A]: ${NC}")" HTTPS_CHOICE
+    HTTPS_CHOICE="${HTTPS_CHOICE:-A}"
+    case "$HTTPS_CHOICE" in
+      [Aa])
+        while true; do
+          read -rp "$(echo -e "${CYAN} HTTPS port [8443]: ${NC}")" HTTPS_PORT
+          HTTPS_PORT="${HTTPS_PORT:-8443}"
+          if port_busy "$HTTPS_PORT"; then
+            err "Port $HTTPS_PORT is busy. Try another."
+            continue
+          fi
+          break
+        done
+        CADDY_SITE_ADDR="$DOMAIN:$HTTPS_PORT"
+        ok "HTTPS will be served on https://$DOMAIN:$HTTPS_PORT"
+        ;;
+      [Bb])
+        CADDY_SITE_ADDR="http://$DOMAIN"
+        ok "HTTP-only site: http://$DOMAIN"
+        ;;
+      *)
+        die "Manual setup selected — aborting. Re-run setup.sh when ready."
+        ;;
+    esac
+  elif ! $HTTP80_FREE && $HTTPS443_FREE; then
+    warn "Port 80 is busy (TLS-ALPN will be used for certs on 443)."
+    CADDY_SITE_ADDR="$DOMAIN"
+    ok "Domain: $DOMAIN — Caddy will obtain certs via TLS-ALPN-01 on 443."
+    warn "If certificate issuance fails, free port 80 or use an alternate HTTPS port."
+  else
+    warn "Both 80 and 443 are busy — a VPN panel likely owns them."
+    echo -e "  The site can still be served with HTTPS on an alternate port using a"
+    echo -e "  self-signed cert, or plain HTTP on an alternate port."
+    read -rp "$(echo -e "${CYAN} Serve plain HTTP on alternate port? [Y/n]: ${NC}")" ALT_HTTP
+    if [[ "${ALT_HTTP:-Y}" =~ ^[Yy]$ ]]; then
+      while true; do
+        read -rp "$(echo -e "${CYAN} Public HTTP port [8080]: ${NC}")" PUBLIC_PORT
+        PUBLIC_PORT="${PUBLIC_PORT:-8080}"
+        if port_busy "$PUBLIC_PORT"; then
+          err "Port $PUBLIC_PORT is busy. Try another."
+          continue
+        fi
+        break
+      done
+      CADDY_SITE_ADDR=":$PUBLIC_PORT"
+      DOMAIN=""  # plain HTTP mode — no cert management
+      ok "Site will be served on http://<server-ip>:$PUBLIC_PORT"
+    else
+      die "Cannot configure public access without a free port. Aborting."
+    fi
   fi
+
+  # Email for Let's Encrypt (required if domain provided)
+  if [[ -n "$DOMAIN" ]]; then
+    LE_EMAIL=""
+    echo ""
+    echo -e "${BOLD}Email for Let's Encrypt certificate notifications:${NC}"
+    echo -e "  (used only for certificate expiry warnings — required by Let's Encrypt)"
+    read -rp "$(echo -e "${CYAN} Email: ${NC}")" LE_EMAIL
+    if [[ -z "$LE_EMAIL" ]]; then
+      warn "No email provided — Caddy will use a default. You may not receive expiry warnings."
+    fi
+  fi
+else
+  # No domain — direct HTTP exposure on a public port
+  echo ""
+  echo -e "${BOLD}Direct public access (no domain):${NC}"
+  echo -e "  The site can be exposed directly on a port of your choice (HTTP)."
+  echo -e "  3X-UI ports are never touched."
+  read -rp "$(echo -e "${CYAN} Public port for the website [default: $SITE_PORT]: ${NC}")" PUBLIC_PORT
+  PUBLIC_PORT="${PUBLIC_PORT:-$SITE_PORT}"
+  if ! [[ "$PUBLIC_PORT" =~ ^[0-9]+$ ]]; then
+    PUBLIC_PORT="$SITE_PORT"
+  fi
+  if [[ "$PUBLIC_PORT" != "$SITE_PORT" ]] && port_busy "$PUBLIC_PORT"; then
+    warn "Port $PUBLIC_PORT is busy — falling back to $SITE_PORT."
+    PUBLIC_PORT="$SITE_PORT"
+  fi
+  ok "Site will be reachable at http://<server-ip>:$PUBLIC_PORT"
 fi
 
 # Confirm
@@ -211,8 +385,16 @@ echo -e "${BOLD}═══ Summary ═══${NC}"
 echo -e "  Install dir:  $INSTALL_DIR"
 echo -e "  Bot token:    ${BOT_TOKEN:0:15}..."
 echo -e "  Admin ID:     $ADMIN_ID"
-echo -e "  Domain:       ${DOMAIN:-none (localhost)}"
-[[ -n "$LE_EMAIL" ]] && echo -e "  LE Email:     $LE_EMAIL"
+echo -e "  Site port:    $SITE_PORT (internal)"
+[[ "$PUBLIC_PORT" != "$SITE_PORT" ]] && echo -e "  Public port:  $PUBLIC_PORT"
+echo -e "  Bot port:     $BOT_PORT"
+if [[ -n "$CADDY_SITE_ADDR" ]]; then
+  echo -e "  Caddy addr:   $CADDY_SITE_ADDR"
+else
+  echo -e "  Web server:   direct (no Caddy)"
+fi
+[[ -n "${LE_EMAIL:-}" ]] && echo -e "  LE Email:     $LE_EMAIL"
+[[ "$VPN_PANEL_DETECTED" == "true" ]] && echo -e "  3X-UI mode:   ${GREEN}coexistence (panel untouched)${NC}"
 echo ""
 read -rp "$(echo -e "${YELLOW} Proceed with installation? [Y/n]: ${NC}")" CONFIRM
 [[ "${CONFIRM:-Y}" =~ ^[Yy]$ ]] || die "Installation cancelled."
@@ -220,7 +402,7 @@ read -rp "$(echo -e "${YELLOW} Proceed with installation? [Y/n]: ${NC}")" CONFIR
 # ═══════════════════════════════════════════════════════════════════════
 # STEP 3: Install system dependencies
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 3/8: Installing system dependencies"
+step "Step 3/9: Installing system dependencies"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -255,8 +437,8 @@ if [[ ! -f "$BUN_BIN" ]]; then
 fi
 ok "Bun installed: $($BUN_BIN --version)"
 
-# Install Caddy (if domain provided)
-if [[ -n "$DOMAIN" ]]; then
+# Install Caddy (only needed when we proxy via a domain / custom public port)
+if [[ -n "$CADDY_SITE_ADDR" ]]; then
   if ! has caddy; then
     info "Installing Caddy web server (for HTTPS)..."
     apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
@@ -275,7 +457,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════
 # STEP 4: Deploy project files (clone from GitHub OR copy local files)
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 4/8: Deploying project files"
+step "Step 4/9: Deploying project files"
 
 mkdir -p "$INSTALL_DIR"
 
@@ -371,7 +553,15 @@ ok "Ownership set to $SERVICE_USER"
 # ═══════════════════════════════════════════════════════════════════════
 # STEP 5: Write environment config
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 5/8: Writing environment configuration"
+step "Step 5/9: Writing environment configuration"
+
+# In direct mode the Next.js standalone server is exposed publicly → bind all
+# interfaces. In Caddy mode we keep it loopback-only for safety.
+if [[ -n "$CADDY_SITE_ADDR" ]]; then
+  SITE_BIND="127.0.0.1"
+else
+  SITE_BIND="0.0.0.0"
+fi
 
 cat > "$INSTALL_DIR/.env" << EOF
 # Auto-generated by setup.sh — do not edit manually.
@@ -382,13 +572,17 @@ TELEGRAM_BOT_TOKEN=$BOT_TOKEN
 TELEGRAM_ADMIN_ID=$ADMIN_ID
 BOT_PORT=$BOT_PORT
 BOT_SERVICE_URL=http://localhost:$BOT_PORT
+BOT_HEALTH_URL=http://localhost:$BOT_PORT/health
 SITE_PORT=$SITE_PORT
+SITE_URL=http://localhost:$SITE_PORT
+PORT=$SITE_PORT
+HOSTNAME=$SITE_BIND
 NODE_ENV=production
 EOF
 
 chmod 600 "$INSTALL_DIR/.env"
 chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/.env"
-ok ".env written"
+ok ".env written (site binds to $SITE_BIND:$SITE_PORT)"
 
 # Also create .env for the bot (it reads from its own dir as fallback)
 cat > "$INSTALL_DIR/mini-services/telegram-bot/.env" << EOF
@@ -404,7 +598,7 @@ ok "Bot .env written"
 # ═══════════════════════════════════════════════════════════════════════
 # STEP 6: Install dependencies, build, database
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 6/8: Installing dependencies & building"
+step "Step 6/9: Installing dependencies & building"
 
 cd "$INSTALL_DIR"
 
@@ -437,18 +631,25 @@ DEFAULT_ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin12345}"
 sudo -u "$SERVICE_USER" -H bash -c "cd '$INSTALL_DIR' && DATABASE_URL='file:$INSTALL_DIR/db/custom.db' ADMIN_USERNAME='$DEFAULT_ADMIN_USERNAME' ADMIN_PASSWORD='$DEFAULT_ADMIN_PASSWORD' '$BUN_BIN' run db:seed-admin" 2>&1 | tail -5
 ok "Admin user seeded (username: $DEFAULT_ADMIN_USERNAME)"
 
+# Seed example blog posts (idempotent)
+if [[ -f "$INSTALL_DIR/prisma/seed-blog.ts" ]]; then
+  info "Seeding blog posts..."
+  sudo -u "$SERVICE_USER" -H bash -c "cd '$INSTALL_DIR' && DATABASE_URL='file:$INSTALL_DIR/db/custom.db' '$BUN_BIN' prisma/seed-blog.ts" 2>&1 | tail -3 || true
+  ok "Blog posts seeded"
+fi
+
 # Install bot dependencies
 info "Installing bot dependencies..."
 sudo -u "$SERVICE_USER" -H bash -c "cd '$INSTALL_DIR/mini-services/telegram-bot' && '$BUN_BIN' install" 2>&1 | tail -3
 ok "Bot dependencies installed"
 
 # ═══════════════════════════════════════════════════════════════════════
-# STEP 7: Configure Caddy (if domain provided)
+# STEP 7: Configure web server (Caddy or direct exposure)
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 7/8: Configuring web server"
+step "Step 7/9: Configuring web server"
 
-if [[ -n "$DOMAIN" ]]; then
-  info "Configuring Caddy for domain: $DOMAIN"
+if [[ -n "$CADDY_SITE_ADDR" ]]; then
+  info "Configuring Caddy for: $CADDY_SITE_ADDR"
 
   # Stop Caddy temporarily to write config
   systemctl stop caddy 2>/dev/null || true
@@ -456,8 +657,9 @@ if [[ -n "$DOMAIN" ]]; then
   # Write Caddyfile
   CADDYFILE="/etc/caddy/Caddyfile"
 
+  # Preserve any existing (non-managed) Caddy config? We own this file in this design.
   # Set Let's Encrypt email if provided
-  if [[ -n "$LE_EMAIL" ]]; then
+  if [[ -n "${LE_EMAIL:-}" ]]; then
     cat > "$CADDYFILE" << EOF
 {
     email $LE_EMAIL
@@ -469,7 +671,8 @@ EOF
 
   cat >> "$CADDYFILE" << EOF
 
-$DOMAIN {
+# ── sarzemine-asal site (managed by setup.sh) ─────────────────────
+$CADDY_SITE_ADDR {
     reverse_proxy localhost:$SITE_PORT
 
     encode gzip zstd
@@ -494,6 +697,7 @@ $DOMAIN {
         format common
     }
 }
+# ── end sarzemine-asal site ───────────────────────────────────────
 EOF
 
   ok "Caddyfile written to $CADDYFILE"
@@ -505,36 +709,69 @@ EOF
 
   if systemctl is-active --quiet caddy; then
     ok "Caddy is running"
-    info "SSL certificate will be obtained automatically on first request."
-    info "Visit https://$DOMAIN in your browser to trigger cert provisioning."
+    if [[ "$CADDY_SITE_ADDR" == "$DOMAIN" ]]; then
+      info "SSL certificate will be obtained automatically on first request."
+      info "Visit https://$DOMAIN in your browser to trigger cert provisioning."
+    fi
   else
     warn "Caddy failed to start. Check: journalctl -u caddy -e"
   fi
 else
-  ok "No domain — skipping Caddy setup. Site accessible at http://localhost:$SITE_PORT"
+  ok "No Caddy — site exposed directly on port $PUBLIC_PORT (HTTP)"
+  info "Make sure port $PUBLIC_PORT is open in your cloud provider's firewall."
 fi
 
-# ── Firewall configuration ───────────────────────────────────────────
-# Allow SSH, HTTP, HTTPS. Block direct access to internal ports (3000, 3003).
+# ── Firewall configuration (3X-UI SAFE) ─────────────────────────────
+# Rules of engagement:
+#   • NEVER add deny rules
+#   • NEVER enable ufw when a VPN panel (3X-UI/x-ui/xray) is present —
+#     enabling it would block the panel's inbound proxy ports and break
+#     VPN clients. We only append allow rules when ufw is ALREADY active.
+#   • Always keep SSH allowed before any change (lockout protection)
 if command -v ufw &>/dev/null; then
-  info "Configuring firewall (ufw)..."
-  ufw allow ssh >/dev/null 2>&1 || true
-  ufw allow http >/dev/null 2>&1 || true
-  ufw allow https >/dev/null 2>&1 || true
-  # Only enable ufw if not already enabled (to avoid locking out SSH)
-  if ! ufw status | grep -q "Status: active"; then
-    echo "y" | ufw enable >/dev/null 2>&1 || true
+  UFW_ACTIVE=false
+  ufw status 2>/dev/null | grep -q "Status: active" && UFW_ACTIVE=true
+
+  if [[ "$VPN_PANEL_DETECTED" == "true" ]]; then
+    if [[ "$UFW_ACTIVE" == "true" ]]; then
+      info "ufw is active — adding allow rules (your VPN ports stay untouched)..."
+      ufw allow ssh >/dev/null 2>&1 || true
+      ufw allow 80/tcp >/dev/null 2>&1 || true
+      ufw allow 443/tcp >/dev/null 2>&1 || true
+      if [[ -z "$CADDY_SITE_ADDR" ]]; then
+        ufw allow "$PUBLIC_PORT/tcp" >/dev/null 2>&1 || true
+      fi
+      ok "Firewall: allow rules added for the website (no deny rules, VPN untouched)"
+    else
+      info "ufw installed but INACTIVE with 3X-UI present — leaving it inactive on purpose"
+      info "(enabling ufw could block your VPN inbound ports; add rules manually if needed)"
+      if [[ -z "$CADDY_SITE_ADDR" ]]; then
+        info "If you later enable ufw, remember: ufw allow $PUBLIC_PORT/tcp"
+      fi
+    fi
+  else
+    info "Configuring firewall (ufw)..."
+    ufw allow ssh >/dev/null 2>&1 || true
+    ufw allow http >/dev/null 2>&1 || true
+    ufw allow https >/dev/null 2>&1 || true
+    if [[ -z "$CADDY_SITE_ADDR" ]]; then
+      ufw allow "$PUBLIC_PORT/tcp" >/dev/null 2>&1 || true
+    fi
+    # Only enable ufw if not already enabled (to avoid locking out SSH)
+    if [[ "$UFW_ACTIVE" != "true" ]]; then
+      echo "y" | ufw enable >/dev/null 2>&1 || true
+    fi
+    ok "Firewall configured (SSH, HTTP, HTTPS allowed)"
   fi
-  ok "Firewall configured (SSH, HTTP, HTTPS allowed)"
 else
-  info "ufw not installed — skipping firewall. Install with: apt install ufw"
-  info "Make sure ports 80 and 443 are open, and ports $SITE_PORT/$BOT_PORT are NOT exposed externally."
+  info "ufw not installed — skipping firewall."
+  info "Make sure ports 80/443 (or $PUBLIC_PORT) are open and $SITE_PORT/$BOT_PORT are NOT exposed."
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
 # STEP 8: Install systemd services + monitoring
 # ═══════════════════════════════════════════════════════════════════════
-step "Step 8/8: Installing services & monitoring"
+step "Step 8/9: Installing services & monitoring"
 
 # Copy systemd service files
 cp "$SCRIPT_DIR/systemd/sarzemine-asal-site.service" /etc/systemd/system/
@@ -579,9 +816,9 @@ mkdir -p "$LOG_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR" 2>/dev/null || true
 
 # ═══════════════════════════════════════════════════════════════════════
-# FINAL: Health verification
+# STEP 9: Health verification
 # ═══════════════════════════════════════════════════════════════════════
-step "Health Verification"
+step "Step 9/9: Health Verification"
 
 ALL_OK=true
 
@@ -621,6 +858,10 @@ for svc in sarzemine-asal-site sarzemine-asal-bot; do
   fi
 done
 
+# Resolve bot username for the summary
+BOT_USERNAME=""
+BOT_USERNAME=$(curl -s --max-time 10 "https://api.telegram.org/bot$BOT_TOKEN/getMe" 2>/dev/null | jq -r '.result.username // empty' 2>/dev/null || echo "")
+
 # ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
@@ -630,34 +871,45 @@ echo -e "${GREEN}${BOLD}  سرزمین عسل — Installation Complete!${NC}"
 echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════════${NC}"
 echo ""
 echo -e "  ${BOLD}Website:${NC}"
-if [[ -n "$DOMAIN" ]]; then
-  echo -e "    https://$DOMAIN"
+if [[ -n "$CADDY_SITE_ADDR" ]]; then
+  if [[ "$CADDY_SITE_ADDR" == "$DOMAIN" ]]; then
+    echo -e "    https://$DOMAIN"
+  else
+    echo -e "    https://$CADDY_SITE_ADDR"
+  fi
 else
-  echo -e "    http://localhost:$SITE_PORT"
+  echo -e "    http://<server-ip>:$PUBLIC_PORT"
 fi
 echo ""
 echo -e "  ${BOLD}Bot:${NC}"
-echo -e "    Telegram: @MeowAboosBot"
+[[ -n "$BOT_USERNAME" ]] && echo -e "    Telegram: @$BOT_USERNAME"
 echo -e "    Health:   http://localhost:$BOT_PORT/health"
 echo ""
 echo -e "  ${BOLD}Admin Panel (مدیریت):${NC}"
-if [[ -n "$DOMAIN" ]]; then
-  echo -e "    https://$DOMAIN/admin/login"
+if [[ -n "$CADDY_SITE_ADDR" ]]; then
+  echo -e "    https://$CADDY_SITE_ADDR/admin/login"
 else
-  echo -e "    http://localhost:$SITE_PORT/admin/login"
+  echo -e "    http://<server-ip>:$PUBLIC_PORT/admin/login"
 fi
 echo -e "    Username: $DEFAULT_ADMIN_USERNAME"
 echo -e "    Password: $DEFAULT_ADMIN_PASSWORD ${YELLOW}(change after first login)${NC}"
 echo ""
 echo -e "  ${BOLD}Agent Panel (نمایندگان فروش):${NC}"
-if [[ -n "$DOMAIN" ]]; then
-  echo -e "    Register: https://$DOMAIN/agent/register"
-  echo -e "    Login:    https://$DOMAIN/agent/login"
+if [[ -n "$CADDY_SITE_ADDR" ]]; then
+  echo -e "    Register: https://$CADDY_SITE_ADDR/agent/register"
+  echo -e "    Login:    https://$CADDY_SITE_ADDR/agent/login"
 else
-  echo -e "    Register: http://localhost:$SITE_PORT/agent/register"
-  echo -e "    Login:    http://localhost:$SITE_PORT/agent/login"
+  echo -e "    Register: http://<server-ip>:$PUBLIC_PORT/agent/register"
+  echo -e "    Login:    http://<server-ip>:$PUBLIC_PORT/agent/login"
 fi
 echo -e "    ${YELLOW}(agents register themselves; admin approves them)${NC}"
+if [[ "$VPN_PANEL_DETECTED" == "true" ]]; then
+  echo ""
+  echo -e "  ${BOLD}3X-UI coexistence:${NC}"
+  echo -e "    ${GREEN}✓${NC} Panel services untouched: ${VPN_SERVICES}"
+  echo -e "    ${GREEN}✓${NC} No VPN port was modified or blocked"
+  echo -e "    ${GREEN}✓${NC} Website ports: $SITE_PORT (site), $BOT_PORT (bot) — localhost only"
+fi
 echo ""
 echo -e "  ${BOLD}Services:${NC}"
 echo -e "    systemctl status sarzemine-asal-site"

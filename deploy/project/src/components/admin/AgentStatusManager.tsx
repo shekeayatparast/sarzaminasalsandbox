@@ -4,27 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
-import {
   Check,
   X,
   Ban,
   CheckCircle2,
   Loader2,
-  Settings2,
-  Percent,
 } from "lucide-react";
 import { toast } from "sonner";
-import { toPersianDigits } from "@/lib/format";
 import { RejectReasonDialog } from "./RejectReasonDialog";
 
 interface AgentStatusManagerProps {
@@ -32,7 +18,6 @@ interface AgentStatusManagerProps {
     id: string;
     name: string;
     status: string;
-    commissionRate: number;
   };
 }
 
@@ -40,10 +25,6 @@ export function AgentStatusManager({ agent }: AgentStatusManagerProps) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
-  const [commissionOpen, setCommissionOpen] = useState(false);
-  const [commissionValue, setCommissionValue] = useState<number>(
-    agent.commissionRate
-  );
 
   const callPatch = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -73,11 +54,6 @@ export function AgentStatusManager({ agent }: AgentStatusManagerProps) {
   const approve = () => callPatch({ status: "active" });
   const block = () => callPatch({ status: "blocked" });
   const activate = () => callPatch({ status: "active" });
-
-  const submitCommission = async () => {
-    const ok = await callPatch({ commissionRate: commissionValue });
-    if (ok) setCommissionOpen(false);
-  };
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -151,97 +127,6 @@ export function AgentStatusManager({ agent }: AgentStatusManagerProps) {
           تأیید و فعال‌سازی
         </Button>
       )}
-
-      <Button
-        variant="secondary"
-        onClick={() => {
-          setCommissionValue(agent.commissionRate);
-          setCommissionOpen(true);
-        }}
-        disabled={busy}
-      >
-        <Settings2 className="w-4 h-4" />
-        ویرایش پورسانت
-      </Button>
-
-      <Dialog open={commissionOpen} onOpenChange={setCommissionOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Percent className="w-5 h-5 text-honey-dark" />
-              تنظیم نرخ پورسانت
-            </DialogTitle>
-            <DialogDescription>
-              نماینده: <b className="text-foreground">{agent.name}</b>
-              <br />
-              نرخ فعلی: {toPersianDigits(agent.commissionRate)}٪
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="flex items-center justify-center">
-              <span className="text-4xl font-extrabold text-honey-dark">
-                {toPersianDigits(commissionValue)}
-              </span>
-              <span className="text-2xl text-muted-foreground mr-1">٪</span>
-            </div>
-            <Slider
-              value={[commissionValue]}
-              onValueChange={(v) => setCommissionValue(v[0] ?? 0)}
-              min={0}
-              max={50}
-              step={1}
-              dir="ltr"
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>۰٪</span>
-              <span>۲۵٪</span>
-              <span>۵۰٪</span>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="commission-input" className="text-xs">
-                یا مقدار دقیق را وارد کنید
-              </Label>
-              <Input
-                id="commission-input"
-                type="number"
-                min={0}
-                max={100}
-                value={commissionValue}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value || "0", 10);
-                  setCommissionValue(isNaN(v) ? 0 : Math.max(0, Math.min(100, v)));
-                }}
-                disabled={busy}
-                dir="ltr"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setCommissionOpen(false)}
-              disabled={busy}
-            >
-              انصراف
-            </Button>
-            <Button
-              onClick={submitCommission}
-              disabled={busy}
-              className="bg-honey-gradient text-primary-foreground"
-            >
-              {busy ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Check className="w-4 h-4" />
-              )}
-              ذخیره
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <RejectReasonDialog
         agentId={agent.id}

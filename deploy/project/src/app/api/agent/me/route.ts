@@ -27,7 +27,6 @@ export async function GET() {
         address: true,
         nationalId: true,
         status: true,
-        commissionRate: true,
         balance: true,
         totalSales: true,
         totalOrders: true,

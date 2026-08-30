@@ -21,7 +21,6 @@ export default async function AgentProfilePage() {
       address: true,
       nationalId: true,
       status: true,
-      commissionRate: true,
       balance: true,
       totalSales: true,
       totalOrders: true,

@@ -52,6 +52,27 @@ process.on("unhandledRejection", (e) => {
 // ── Create bot ───────────────────────────────────────────────────────
 const bot = new Bot(BOT_TOKEN);
 
+// ── Inbox logger (dev communication channel) ─────────────────────────
+// Logs EVERY incoming update (before access control) to inbox.log so the
+// developer agent can read user messages during the project.
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+const INBOX_PATH = join(dirname(import.meta.dir), "inbox.log");
+mkdirSync(dirname(INBOX_PATH), { recursive: true });
+bot.use(async (ctx, next) => {
+  try {
+    const from = ctx.from;
+    const msg = ctx.message as any;
+    const cb = ctx.callbackQuery as any;
+    const text =
+      msg?.text ??
+      (cb ? `callback:${cb.data}` : (msg?.caption ?? `[${msg?.photo ? "photo" : "media"}]`));
+    const line = `${new Date().toISOString()} | id=${from?.id ?? "?"} | ${from?.first_name ?? ""} ${from?.username ? "@" + from.username : ""} | ${String(text).slice(0, 800)}\n`;
+    appendFileSync(INBOX_PATH, line, "utf8");
+  } catch {}
+  return next();
+});
+
 // Middlewares
 bot.use(accessControl);
 bot.use(answerCallbacks);

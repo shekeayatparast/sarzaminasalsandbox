@@ -7,11 +7,12 @@ import { persist } from "zustand/middleware";
 export type ViewName =
   | "home"
   | "products"
-  | "about"
   | "benefits"
-  | "cart"
+  | "about"
+  | "track"
+  | "blog"
   | "contact"
-  | "track";
+  | "cart";
 
 interface NavState {
   view: ViewName;

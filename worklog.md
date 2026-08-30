@@ -1651,3 +1651,154 @@ Stage Summary:
 - ✅ Lint: PASS (0 errors, 0 warnings)
 - ✅ Pushed to GitHub at commit aef44b5
 - Files: 21 modified + 19 new = 40 files, ~6000+ lines of new/changed code
+
+---
+Task ID: 1-setup
+Agent: main (orchestrator)
+Task: Download GitHub release workspace, set up sandbox, start Telegram bot
+
+Work Log:
+- Downloaded release asset workspace-a4a58f79....tar (67MB) from github.com/shekeayatparast/sarzaminasalsandbox/releases/tag/Oosht
+- Extracted to /home/z/downloaded/extracted and reviewed structure (Next.js honey shop + admin/agent panels + telegram-bot mini-service + deploy package)
+- Copied project into /home/z/my-project: src, public, prisma, db/custom.db, deploy, mini-services/telegram-bot, agent-ctx, worklog.md, package.json, bun.lock, configs
+- Kept sandbox infra: .zscripts, Caddyfile, .env, examples, skills, tests, node_modules
+- bun install OK; prisma generate OK; dev server restarted on :3000; GET / → 200
+- Telegram bot: added inbox logger middleware (logs ALL incoming updates to mini-services/telegram-bot/inbox.log BEFORE access control), created .env with NEW token 7752087400:AAE... (@Zereshkjbot), ADMIN_ID 5207653104, port 3003; started via start-bot.sh; health OK, polling OK
+- Sent welcome message to admin via bot API
+
+Stage Summary:
+- Project fully running in sandbox on :3000 (honey shop "سرزمین عسل")
+- Bot live on :3003 with new token; inbox.log = communication channel with user
+- Read key files: Header.tsx (has پنل نماینده/پنل مدیریت links to remove), schema.prisma (commissionRate on Agent, AgentPayment), stats.ts, admin/agent dashboards (commission displays to remove), globals.css (honey palette, oklch), layout.tsx (Vazirmatn, RTL)
+- Main site = SPA via zustand useNav (views: home/products/about/benefits/cart/contact/track) → blog will be a new SPA view
+- Plan: 3 parallel subagents (blog feature / commission removal / site modernization), then orchestrator wires Header+Footer+store, fixes deploy for 3X-UI coexistence, final test, push to GitHub
+
+---
+Task ID: 3-b
+Agent: commission-removal (fullstack-developer)
+Task: حذف کامل بخش پورسانت (commission) از پنل مدیریت و پنل نمایندگی — UI + API + منطق آمار (بدون تغییر schema.prisma)
+
+Work Log:
+- ابتدا worklog.md (بخش 1-setup) و agent-ctx خوانده شد؛ rg "commission|پورسانت" روی src و mini-services اجرا شد (~۱۲۰ مورد در ۱۸ فایل).
+- schema.prisma دست نخورد (فیلد commissionRate با @default(10) در DB ماند — طبق دستور، ساب‌ایجنت 3-a مسئول schema است). هیچ db:push اجرا نشد.
+
+پنل ادمین:
+- src/app/admin/(panel)/page.tsx: کارت «پورسانت پرداختی» → «میانگین هر سفارش» (totalRevenue/totalOrders با guard صفر، آیکون Receipt؛ Wallet از imports حذف شد). totalCommissionPaid از fallback حذف و fallback ناقصِ pre-existing هم کامل شد (period/periodLabel/periodOrders/periodRange*/seriesLabel* — TS2740 رفع شد). در ActiveAgentsList: ستون «پورسانت» و Badge درصد حذف، commissionRate از select حذف.
+- src/app/admin/(panel)/agents/page.tsx: TableHead «پورسانت»، TableCell با Badge، بلوک موبایل «پورسانت:» و commissionRate از select حذف؛ import Badge بلااستفاده حذف شد.
+- src/app/admin/(panel)/agents/[id]/page.tsx: MiniStat «نرخ پورسانت» → «میانگین ارزش سفارش» (guard دار، آیکون Receipt؛ PercentIcon سفارشی حذف شد). دو FinancialRow (نرخ پورسانت + پورسانت تقریبی) حذف. متن «تراکنش اخیر (پورسانت/پرداخت)» → «تراکنش اخیر». commission از map نوع تراکنش حذف و fallback به «تراکنش» تغییر کرد (تراکنش‌های قدیمی commission چیزی خوانا نشان می‌دهند). commissionRate از props.AgentStatusManager حذف.
+- src/components/admin/AgentStatusManager.tsx: دکمه «ویرایش پورسانت»، Dialog «تنظیم نرخ پورسانت» (Slider/Input)، stateهای commissionOpen/commissionValue و submitCommission کامل حذف شد؛ callPatch فقط برای status باقی ماند؛ prop commissionRate از interface حذف؛ imports بلااستفاده (Dialog/Input/Label/Slider/Settings2/Percent/toPersianDigits) پاک شد.
+- src/components/admin/DownloadAgentsCsvButton.tsx: ستون CSV «نرخ پورسانت» (هدر + مقدار) و commissionRate از interface حذف شد.
+- src/app/admin/(panel)/reports/page.tsx: کارت «پورسانت پرداختی» → «سهم فروش نماینده‌ها» (agentRevenue + درصد از کل با guard؛ گرید ۴تایی حفظ شد).
+- src/lib/pdf/reports-pdf.ts: کارت «پورسانت پرداختی» در خلاصه PDF → «میانگین هر سفارش» (گرید 2x2 سالم ماند).
+
+API ادمین:
+- src/app/api/admin/agents/[id]/route.ts: commissionRate از zod schema و منطق update و select برگشتی حذف شد — ادمین دیگر از طریق API هم نمی‌تواند پورسانت ست کند (تست شد: PATCH با commissionRate عملاً no-op است).
+- src/app/api/admin/agents/route.ts: commissionRate از select حذف شد (تست: keys پاسخ فاقد commissionRate).
+
+پنل نماینده:
+- src/app/agent/(panel)/page.tsx: کارت «پورسانت کسب‌شده» → «فروش کل» (formatToman(agent.totalSales)، آیکون Coins). Info «نرخ پورسانت» → «عضویت از» (formatJalaliDateTime(agent.createdAt)؛ گرید ۴تایی حفظ شد). commissionRate از type محلی و select حذف.
+- src/app/agent/(panel)/profile/page.tsx: commissionRate از select حذف.
+- src/components/agent/ProfileForm.tsx: نمایش «نرخ پورسانت» → «موجودی حساب» (balance؛ گرید ۴تایی حفظ شد) و commissionRate از AgentProfileData حذف.
+- src/app/api/agent/me/route.ts و src/app/api/agent/profile/route.ts: commissionRate از هر ۳ select حذف (تست /api/agent/me: keys بدون commissionRate).
+- src/app/api/auth/agent/login/route.ts: commissionRate از پاسخ JSON حذف.
+- src/app/api/auth/agent/register/route.ts: commissionRate: 10 از data ایجاد حذف — امن چون schema @default(10) دارد (verified).
+
+منطق آمار:
+- src/lib/stats.ts: از AgentStats → totalCommission و commissionRate (interface + محاسبه + return + select) حذف؛ از AdminStats → totalCommissionPaid (interface + reduce + return) حذف و commissionRate از select agents حذف شد.
+- src/lib/format.ts: موردی نداشت (فقط مثال شماره موبایل 09123456789 بود که بی‌ربط است).
+
+ربات تلگرام:
+- mini-services/telegram-bot: rg «پورسانت|commission» → هیچ موردی؛ ربات سالم روی :3003 (health 200) — تغییری لازم نبود.
+
+تأیید نهایی:
+- bun run lint → 0 error, 0 warning.
+- bunx tsc --noEmit → فقط خطاهای pre-existing در فایل‌های ویرایش‌نشده (api/admin/reports/pdf/route.ts مورد Uint8Array/lib، site/AddToCartDialog.tsx، site/Header.tsx که scope ساب‌ایجنت 3-c است)؛ هیچ فایل ویرایش‌شده‌ای خطا ندارد.
+- rg -i "commission|پورسانت" src mini-services → خروجی خالی (exit 1). فقط schema.prisma (عمداً دست‌نخورده).
+- curl (با session واقعی ادمین/نماینده): /admin /admin/agents /admin/reports /admin/agents/[id] /agent /agent/profile همه 200؛ بدون session 307؛ /api/admin/reports/pdf → 200 با PDF سالم 27KB. HTML همه صفحات rg «پورسانت» → 0 مورد؛ کارت‌های جدید («میانگین هر سفارش»، «عضویت از»، «میانگین ارزش سفارش»، «موجودی حساب») در HTML تأیید شد.
+- dev.log بدون خطای compile.
+
+Stage Summary:
+- بخش پورسانت به‌طور کامل از UI + API + آمار حذف شد (۱۶ فایل ویرایش). DB schema دست نخورده (تداخل با 3-a نداریم). جایگزین‌های مفید: میانگین ارزش سفارش (داشبورد ادمین + جزئیات نماینده + PDF)، سهم فروش نماینده‌ها (گزارش‌ها)، فروش کل/عضویت از (داشبورد نماینده)، موجودی حساب (پروفایل). تراکنش‌های قدیمی commission در تاریخچه با لیبل عمومی «تراکنش» نمایش داده می‌شوند. لینت پاک، تایپ فایل‌های ویرایش‌شده پاک، همه صفحات 200.
+---
+Task ID: 3-c
+Agent: frontend-styling-expert
+Task: نوسازی کامل UX/UI صفحات سایت اصلی (مدرن‌سازی طراحی)
+
+Work Log:
+- Read worklog (Task 1-setup) + all 8 target view files, globals.css, page.tsx, format lib, prisma Product model (featured exists), ui components inventory.
+- globals.css: appended-only new utilities (honey palette untouched): .glass (backdrop-blur, light+dark), .honey-glow / .honey-glow-lg / .honey-glow-hover (honey box-shadows), .bg-hexagon-pattern / -strong (conic-gradient honeycomb) , .bg-dot-pattern, .honey-divider; keyframes: shimmer (2 variants), float-slow, pulse-soft; prefers-reduced-motion kill-switch for all decorative animations.
+- NEW src/components/site/shared-ui.tsx: RTL-aware framer-motion primitives — Reveal (whileInView, slide-from-RIGHT for RTL), StaggerGrid/StaggerItem, variants (fadeUp, slideFromRight/Left, scaleIn, staggerContainer), SectionHeading (badge + gradient title + honey divider). All respect useReducedMotion.
+- page.tsx: AnimatePresence keyed view transitions (fade/slide, reduced-motion aware).
+- HomeView: 4-layer hero (photo + gradient + radial glow + masked hexagon pattern), floating hexagon/droplet decorations (float-slow/soft-float), staggered hero entrance from right, glass stat chips (۳ نوع عسل / ارسال سراسری / ۱۰۰٪ تضمین اصالت), big CTAs with honey-glow + hover scale, product skeletons (3 cards) instead of loading text, stagger grids everywhere, framed about image, patterned CTA.
+- ProductCard: framer hover lift (y:-6), honey-glow-hover border glow, soft image zoom (scale-110, 700ms), featured «پیشنهاد ویژه» gradient ribbon, price pill badge, whileTap add button, aria-labels; image is a focus-visible button (navigates to products).
+- ProductsView: patterned hero + chip badge, skeleton grid while loading, stagger product grid, glass CTA card.
+- BenefitsView: per-benefit soft-toned icon chips (green/honey/amber/orange — warm palette + soft green), hover lift cards, gradient header strips on honey-type cards, FAQ accordion kept with reveal.
+- AboutView: story as vertical timeline (4 milestones, honey dots + ring), rotated-frame hero image + floating droplet badge, stats on honey-gradient + pattern, value cards stagger, checklist with honey circles (Truck note added).
+- ContactView: 3 info cards (phone / address / NEW working hours), big tap-friendly tel CTA (h-16, honey-glow-lg, rotating icon), glass-less honey CTA card.
+- CartView: logic 100% untouched (fetches/steps/handlers/ids kept); empty-cart illustration (dashed circle + floating hexes), animated success check (spring), honey-dark patterned payment card, AnimatePresence item add/remove animations, 44px touch targets, sticky summary with honey-glow, emoji removed, blue info note → honey tones.
+- TrackOrdersView: logic untouched; StatusTracker rebuilt as modern stepper — horizontal (sm+) with icons/checks/honey connectors + vertical timeline (mobile), current step = honey gradient + pulse-soft + ring + aria-current; post-tracking block recolored from blue → honey palette; labeled icons in form, skeleton result cards while searching, empty-result illustration.
+- a11y: aria-labels (fa), aria-hidden decorations, focus-visible rings on custom links/buttons, min 44px interactive targets, motion-reduce/useReducedMotion everywhere.
+- Verified: `bun run lint` → 0 errors; `bunx tsc --noEmit` → 0 errors in ALL edited files (remaining src errors are pre-existing/out-of-scope: AddToCartDialog, Header (parallel agent), api/admin/reports/pdf); dev.log clean (no hydration/compile errors), GET / 200, SSR HTML contains new utilities.
+
+Stage Summary:
+- Main site fully modernized on the existing honey palette: layered heroes, honeycomb patterns, glass surfaces, honey glows, scroll-reveal + stagger + hover micro-interactions (framer-motion, RTL-correct), modern product cards with featured ribbon, skeleton loading states, responsive order stepper, timeline story, tap-friendly contact CTA, and a11y/reduced-motion support.
+- New files: src/components/site/shared-ui.tsx. Edited: globals.css (append-only), page.tsx, HomeView, ProductsView, ProductCard, AboutView, BenefitsView, ContactView, CartView, TrackOrdersView. No business-logic/store/API changes. Header/Footer/store/AddToCartDialog untouched.
+- Note for orchestrator: pre-existing tsc errors remain in AddToCartDialog.tsx (product.image null), Header.tsx ("cart" nav type — looks like a parallel agent's store edit), api/admin/reports/pdf/route.ts (Uint8Array BodyInit) — none from this task.
+---
+Task ID: 3-a
+Agent: blog-feature (fullstack-developer)
+Task: ساخت سیستم وبلاگ کامل — مدل دیتابیس، API عمومی/ادمین، پنل مدیریت وبلاگ، نمای عمومی وبلاگ و seed
+
+Work Log:
+- worklog.md (بخش‌های 1-setup, 3-b, 3-c) خوانده شد؛ الگوها از products API، ProductManager.tsx، صفحات ادمین، shared-ui.tsx و lib/format کپی/رعایت شد.
+- prisma/schema.prisma: مدل BlogPost اضافه شد (id, title, slug@unique, excerpt, content, coverImage?, tags, published, views, createdAt, updatedAt) → bun run db:push موفق (داده‌های قبلی حفظ شدند، prisma client تولید شد).
+- prisma/seed-blog.ts (جدید): ۲ پست واقعی و مفید published — «خواص شگفت‌انگیز عسل گون» (slug: honey-gon-benefits) و «تشخیص عسل طبیعی از مصنوعی؛ ۷ روش» (slug: natural-vs-fake-honey)، هر کدام ۴-۶ پاراگراف Markdown با سرفصل/لیست/blockquote؛ idempotent با upsert-by-slug. اجرا شد → ۲ پست ساخته شدند.
+- API عمومی: src/app/api/blog/route.ts (GET لیست published با select محدود و بدون content؛ force-dynamic + NO_CACHE_HEADERS مثل /api/products) و src/app/api/blog/[slug]/route.ts (GET یک پست published با content کامل + increment views در هر فراخوانی، ۴۰۴ اگر نبود/پیش‌نویس بود).
+- API ادمین (با getCurrentAdmin): src/app/api/admin/blog/route.ts (GET همه پست‌ها با جستجوی q در title/slug/tags + صفحه‌بندی page/limit؛ POST ایجاد با zod — slug دستی یا تولید از title، برای title فارسی fallback `post-<uid>`، uniqueSlug با پسوند -2/-3) و src/app/api/admin/blog/[id]/route.ts (GET/PATCH/DELETE — در PATCH اگر title عوض شد و slug دستی نداد، slug از title جدید بازتولید می‌شود؛ چک یکتایی slug با exclude خود ردیف).
+- پنل ادمین: src/app/admin/(panel)/blog/page.tsx (سروری، force-dynamic، getCurrentAdmin → redirect /admin/login) + src/components/admin/BlogManager.tsx (کلاینت): جدول دسکتاپ + لیست کارتی موبایل (عنوان، slug، Badge منتشرشده/پیش‌نویس، formatJalaliDateTime، بازدید toPersianDigits)، ۴ کارت آماری، جستجو، Dialog بزرگ sm:max-w-4xl با فرم کامل (عنوان، slug با پیشنهاد خودکار و پاکسازی زنده، خلاصه با شمارنده کاراکتر، محتوا Textarea بزرگ با راهنمای Markdown + تب «پیش‌نمایش زنده» react-markdown، آپلود تصویر شاخب FileReader/dataURL سقف ۱.۵MB مثل ProductManager، تگ‌ها، Switch انتشار)، toggle سریع انتشار/لغو انتشار، حذف با AlertDialog، toastهای sonner، router.refresh بعد از هر mutation.
+- AdminSidebar: آیتم { href: "/admin/blog", label: "وبلاگ", icon: Newspaper } بعد از «محصولات» و قبل از «مدیریت نمایندگان» اضافه شد (isActive الگوی فعلی را دقیقاً رعایت می‌کند چون از همان NAV_ITEMS استفاده می‌شود).
+- نمای عمومی SPA: src/components/site/BlogView.tsx (fetch no-store از /api/blog با Skeleton و empty-state گرافیکی و error-state؛ هدر honeycomb با عنوان «وبلاگ سرزمین عسل» + آیکون Feather؛ گرید کارت با StaggerGrid/StaggerItem/Reveal/SectionHeading از shared-ui.tsx؛ تصویر شاخب یا placeholder گرادیان عسلی + BookOpen؛ Badge تگ‌ها؛ تاریخ شمسی؛ «ادامه مطلب») و src/components/site/BlogPostView.tsx (slug از useNav selectedSlug؛ fetch no-store با effect ضد cancel؛ Skeleton/حالت یافت‌نشد؛ تصویر بزرگ + عنوان + متا با toPersianDigits و formatJalaliDate؛ رندر react-markdown RTL با استایل سرفصل/لیست/blockquote با bg-honey-light/20/کد/لینک target=_blank؛ دکمه‌های «بازگشت به وبلاگ» → navigate("blog")).
+- قرارداد ناوبری رعایت شد: در هر دو view از `const navigate = useNav((s) => s.navigate) as (view: string, slug?: string | null) => void;` استفاده شد؛ store.ts دست نخورد. تایپ‌های صادرشده: AdminBlogPost، BlogListItem، MarkdownBody.
+- نکته عملیاتی: dev server یک‌بار restart شد (kill + اجرای مجدد bun run dev در بک‌گراند) چون PrismaClient قدیمی روی globalThis کش شده بود و db.blogPost تعریف‌نشده بود؛ بعد از restart همه‌چیز سالم. ربات تلگرام :3003 سالم و بدون تغییر.
+- رفع یک lint error در BlogPostView (react-hooks/set-state-in-effect): ست‌استیت‌های سنکرون از بدنه effect به رندر (شرط !slug) و callbackهای async منتقل شد.
+
+تست‌های curl (همه موفق):
+- GET /api/blog → ۲ پست published (فیلد content در لیست نیست)
+- GET /api/blog/honey-gon-benefits → پست کامل؛ views در هر فراخوانی زیاد شد (۰→۱→۲)
+- GET/PATCH/POST/DELETE /api/admin/blog* بدون احراز هویت → ۴۰۱؛ صفحه /admin/blog بدون session → 307
+- login (admin) با curl -c → GET /api/admin/blog → ۲ پست؛ ?q=عسل گون → ۱ نتیجه
+- POST با title فارسی بدون slug → slug خودکار post-mtg005hchywa؛ PATCH toggle published → true؛ PATCH تغییر title → slug بازتولید شد؛ public list ۳→ بعد از DELETE → ۲
+- GET /admin/blog با کوکی → 200 و HTML شامل «مدیریت وبلاگ/نوشتن مطلب جدید/فهرست مقالات»؛ آیتم «وبلاگ» در سایدبار با aria-current="page"
+
+تأیید نهایی:
+- bun run lint → 0 error, 0 warning
+- bunx tsc --noEmit → هیچ خطایی در فایل‌های جدید/ویرایش‌شده (خطاهای باقی‌مانده pre-existing در deploy/, examples/, mini-services/, AddToCartDialog, Header, api/admin/reports/pdf)
+- dev.log بدون خطای compile؛ GET / و /admin/blog و /api/blog همه 200
+
+Stage Summary:
+- سیستم وبلاگ کامل end-to-wrap آماده است: مدل + seed، API عمومی (لیست/جزئیات با شمارش بازدید)، API ادمین CRUD با اعتبارسنجی zod و slug هوشمند، پنل مدیریت /admin/blog با ویرایشگر Markdown + پیش‌نمایش زنده + آپلود تصویر + toggle انتشار + حذف، و دو SPA view عمومی (BlogView لیست، BlogPostView مقاله). سایدبار ادمین آیتم «وبلاگ» دارد. فقط wiring نهایی (افزودن "blog" به ViewName در store.ts + رندر viewها در page.tsx + لینک Header/Footer) با orchestrator است طبق قرارداد navigate cast شده.
+
+---
+Task ID: 4-wiring
+Agent: main (orchestrator)
+Task: Wire blog into SPA, remove panel buttons from Header, fix type errors, 3X-UI-safe deploy
+
+Work Log:
+- store.ts: added "blog" to ViewName union
+- page.tsx: render BlogView (list) / BlogPostView (when selectedSlug set) for view === "blog"
+- Header.tsx: FULL REWRITE - removed panel-representative and panel-admin Link buttons (desktop + mobile sheet) per user request; added blog nav item (BookOpen icon); modernized: glass effect on scroll, pill nav buttons, nav shows at lg breakpoint (7 items); go() now resets selectedSlug on every main-section navigation
+- Footer.tsx: added blog link with BookOpen icon, subtle dot pattern decoration, honeycomb accent row
+- Fixed 4 remaining tsc errors in src/: Header go() signature (ViewName), AddToCartDialog product.image null (fallback empty + conditional img with initial-letter placeholder), pdf route Uint8Array to BodyInit (wrapped in Blob)
+- tsconfig.json: excluded deploy/, mini-services/, examples/, skills/ (separate projects with own deps)
+- lint and tsc both 0 errors
+- deploy/setup.sh: REWROTE with 3X-UI coexistence: detects 3x-ui/x-ui/xray services + listening ports; site/bot port selection with busy-check; reverse-proxy site-address resolution (https-domain / https-altport when 443 owned by xray / http-only / direct no-proxy mode); .env now writes PORT + HOSTNAME (127.0.0.1 behind proxy, 0.0.0.0 direct) + SITE_URL + BOT_HEALTH_URL (fixes monitor.sh with custom ports); firewall NEVER denies, never auto-enables when VPN panel present; blog seed step; bot username via getMe in summary; steps renumbered 1-9
+- deploy/caddy/Caddyfile.template: documented parameterized SITE_ADDR modes
+- deploy/README.md: added 3X-UI coexistence section (architecture diagram, firewall policy, port matrix), removed commission from feature list, added products/customers/blog features
+- Synced deploy/project with current src/prisma/public/configs/mini-services (rsync)
+- Regenerated deploy/sarzemine-asal-deploy.tar.gz (6.4MB); all scripts pass bash -n
+
+Stage Summary:
+- Panel links fully hidden from public site (panels still work via direct URL)
+- Blog wired into SPA navigation
+- 0 lint / 0 tsc errors project-wide
+- Deploy package is 3X-UI-safe: no port theft, no firewall lockout, localhost-only internals

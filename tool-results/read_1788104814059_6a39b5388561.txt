@@ -1,0 +1,784 @@
+     1→// Stats calculation helpers for agent and admin dashboards.
+     2→// These functions compute weekly/monthly sales, top products, etc.
+     3→// Used by /api/agent/stats and /api/admin/stats.
+     4→
+     5→import { db } from "@/lib/db";
+     6→
+     7→// ── Report period type ───────────────────────────────────────────────
+     8→export type ReportPeriod = "weekly" | "monthly" | "yearly";
+     9→
+    10→// ── Persian (Jalali) date helpers ────────────────────────────────────
+    11→// We need to compute "this week" and "this month" in the user's timezone
+    12→// (Asia/Tehran) and ideally in the Jalali calendar for proper labeling.
+    13→// For now, we use Gregorian weeks/months but format labels in Persian.
+    14→
+    15→const TZ = "Asia/Tehran";
+    16→
+    17→// Convert an English number to Persian digits
+    18→export function toPersianDigits(n: number | string): string {
+    19→  const map = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
+    20→  return String(n).replace(/[0-9]/g, (d) => map[parseInt(d, 10)]);
+    21→}
+    22→
+    23→// Get start of week (Saturday in Iran calendar)
+    24→export function getStartOfWeek(date: Date = new Date()): Date {
+    25→  const d = new Date(date);
+    26→  const day = d.getDay(); // 0=Sun, 6=Sat
+    27→  // In Iran, week starts on Saturday (day 6)
+    28→  // To get the most recent Saturday:
+    29→  //   if today is Saturday (6), diff = 0
+    30→  //   if today is Sunday (0), diff = -1 (1 day back to Saturday)
+    31→  //   if today is Monday (1), diff = -2
+    32→  //   ...
+    33→  //   if today is Friday (5), diff = -6
+    34→  let diff = day === 6 ? 0 : -(day + 1);
+    35→  d.setDate(d.getDate() + diff);
+    36→  d.setHours(0, 0, 0, 0);
+    37→  return d;
+    38→}
+    39→
+    40→export function getStartOfMonth(date: Date = new Date()): Date {
+    41→  const d = new Date(date);
+    42→  d.setDate(1);
+    43→  d.setHours(0, 0, 0, 0);
+    44→  return d;
+    45→}
+    46→
+    47→export function daysAgo(n: number): Date {
+    48→  const d = new Date();
+    49→  d.setDate(d.getDate() - n);
+    50→  d.setHours(0, 0, 0, 0);
+    51→  return d;
+    52→}
+    53→
+    54→// ── Agent stats ──────────────────────────────────────────────────────
+    55→export interface AgentStats {
+    56→  // Summary
+    57→  totalOrders: number;
+    58→  totalSales: number; // toman
+    59→  totalCommission: number; // toman (calculated from commission rate)
+    60→  balance: number;
+    61→  commissionRate: number;
+    62→  pendingOrders: number;
+    63→  // This period
+    64→  thisWeekSales: number;
+    65→  thisMonthSales: number;
+    66→  // Growth %
+    67→  weekGrowthPct: number | null; // vs last week
+    68→  monthGrowthPct: number | null; // vs last month
+    69→  // Charts
+    70→  weeklySeries: { label: string; sales: number; orders: number }[]; // last 8 weeks
+    71→  monthlySeries: { label: string; sales: number; orders: number }[]; // last 6 months
+    72→  orderStatusDistribution: { status: string; count: number }[];
+    73→  topProducts: { productName: string; quantity: number; total: number }[];
+    74→  recentOrders: {
+    75→    id: string;
+    76→    orderNumber: string;
+    77→    finalAmount: number;
+    78→    orderStatus: string;
+    79→    paymentStatus: string;
+    80→    createdAt: string;
+    81→  }[];
+    82→}
+    83→
+    84→export async function computeAgentStats(agentId: string): Promise<AgentStats> {
+    85→  const agent = await db.agent.findUnique({
+    86→    where: { id: agentId },
+    87→    select: {
+    88→      id: true,
+    89→      commissionRate: true,
+    90→      balance: true,
+    91→      totalSales: true,
+    92→      totalOrders: true,
+    93→    },
+    94→  });
+    95→  if (!agent) throw new Error("Agent not found");
+    96→
+    97→  // All orders for this agent
+    98→  const orders = await db.order.findMany({
+    99→    where: { agentId },
+   100→    select: {
+   101→      id: true,
+   102→      orderNumber: true,
+   103→      finalAmount: true,
+   104→      totalAmount: true,
+   105→      uniqueAmount: true,
+   106→      orderStatus: true,
+   107→      paymentStatus: true,
+   108→      createdAt: true,
+   109→      items: {
+   110→        select: {
+   111→          productName: true,
+   112→          quantity: true,
+   113→          total: true,
+   114→        },
+   115→      },
+   116→    },
+   117→    orderBy: { createdAt: "desc" },
+   118→  });
+   119→
+   120→  const totalOrders = orders.length;
+   121→  const totalSales = orders.reduce(
+   122→    (sum, o) => sum + (o.paymentStatus === "confirmed" ? o.finalAmount : 0),
+   123→    0
+   124→  );
+   125→  const totalCommission = Math.round((totalSales * agent.commissionRate) / 100);
+   126→  const pendingOrders = orders.filter(
+   127→    (o) =>
+   128→      o.orderStatus === "awaiting_payment" || o.orderStatus === "paid"
+   129→  ).length;
+   130→
+   131→  // This week's sales (confirmed payments only)
+   132→  const weekStart = getStartOfWeek();
+   133→  const monthStart = getStartOfMonth();
+   134→  const lastWeekStart = new Date(weekStart);
+   135→  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+   136→  const lastMonthStart = new Date(monthStart);
+   137→  lastMonthStart.setMonth(lastMonthStart.getMonth() - 1);
+   138→
+   139→  const thisWeekSales = orders
+   140→    .filter(
+   141→      (o) =>
+   142→        o.paymentStatus === "confirmed" && new Date(o.createdAt) >= weekStart
+   143→    )
+   144→    .reduce((s, o) => s + o.finalAmount, 0);
+   145→  const thisMonthSales = orders
+   146→    .filter(
+   147→      (o) =>
+   148→        o.paymentStatus === "confirmed" && new Date(o.createdAt) >= monthStart
+   149→    )
+   150→    .reduce((s, o) => s + o.finalAmount, 0);
+   151→  const lastWeekSales = orders
+   152→    .filter(
+   153→      (o) =>
+   154→        o.paymentStatus === "confirmed" &&
+   155→        new Date(o.createdAt) >= lastWeekStart &&
+   156→        new Date(o.createdAt) < weekStart
+   157→    )
+   158→    .reduce((s, o) => s + o.finalAmount, 0);
+   159→  const lastMonthSales = orders
+   160→    .filter(
+   161→      (o) =>
+   162→        o.paymentStatus === "confirmed" &&
+   163→        new Date(o.createdAt) >= lastMonthStart &&
+   164→        new Date(o.createdAt) < monthStart
+   165→    )
+   166→    .reduce((s, o) => s + o.finalAmount, 0);
+   167→
+   168→  const weekGrowthPct =
+   169→    lastWeekSales > 0
+   170→      ? Math.round(((thisWeekSales - lastWeekSales) / lastWeekSales) * 100)
+   171→      : thisWeekSales > 0
+   172→      ? 100
+   173→      : null;
+   174→  const monthGrowthPct =
+   175→    lastMonthSales > 0
+   176→      ? Math.round(((thisMonthSales - lastMonthSales) / lastMonthSales) * 100)
+   177→      : thisMonthSales > 0
+   178→      ? 100
+   179→      : null;
+   180→
+   181→  // Weekly series (last 8 weeks)
+   182→  const weeklySeries: { label: string; sales: number; orders: number }[] = [];
+   183→  for (let i = 7; i >= 0; i--) {
+   184→    const wStart = new Date(weekStart);
+   185→    wStart.setDate(wStart.getDate() - i * 7);
+   186→    const wEnd = new Date(wStart);
+   187→    wEnd.setDate(wEnd.getDate() + 7);
+   188→    const weekOrders = orders.filter((o) => {
+   189→      const d = new Date(o.createdAt);
+   190→      return d >= wStart && d < wEnd;
+   191→    });
+   192→    const sales = weekOrders
+   193→      .filter((o) => o.paymentStatus === "confirmed")
+   194→      .reduce((s, o) => s + o.finalAmount, 0);
+   195→    weeklySeries.push({
+   196→      label: `هفته ${toPersianDigits(8 - i)}`,
+   197→      sales,
+   198→      orders: weekOrders.length,
+   199→    });
+   200→  }
+   201→
+   202→  // Monthly series (last 6 months)
+   203→  const monthlySeries: { label: string; sales: number; orders: number }[] = [];
+   204→  const monthNames = [
+   205→    "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+   206→    "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
+   207→  ];
+   208→  // Approximate Jalali month using simple offset (good enough for labels)
+   209→  for (let i = 5; i >= 0; i--) {
+   210→    const mStart = new Date(monthStart);
+   211→    mStart.setMonth(mStart.getMonth() - i);
+   212→    const mEnd = new Date(mStart);
+   213→    mEnd.setMonth(mEnd.getMonth() + 1);
+   214→    const monthOrders = orders.filter((o) => {
+   215→      const d = new Date(o.createdAt);
+   216→      return d >= mStart && d < mEnd;
+   217→    });
+   218→    const sales = monthOrders
+   219→      .filter((o) => o.paymentStatus === "confirmed")
+   220→      .reduce((s, o) => s + o.finalAmount, 0);
+   221→    // Approximate Jalali month index (Gregorian month - 3, mod 12, then +1 if past March 21)
+   222→    let jIdx = (mStart.getMonth() - 2 + 12) % 12;
+   223→    if (mStart.getMonth() < 2) jIdx = (mStart.getMonth() + 10) % 12;
+   224→    monthlySeries.push({
+   225→      label: monthNames[jIdx],
+   226→      sales,
+   227→      orders: monthOrders.length,
+   228→    });
+   229→  }
+   230→
+   231→  // Order status distribution — covers all 7 statuses (count 0 if missing)
+   232→  // so the donut chart can render a stable legend.
+   233→  const ALL_STATUS_KEYS = [
+   234→    "awaiting_payment",
+   235→    "paid",
+   236→    "confirmed",
+   237→    "preparing",
+   238→    "shipped",
+   239→    "delivered",
+   240→    "cancelled",
+   241→  ] as const;
+   242→  const statusLabels: Record<string, string> = {
+   243→    awaiting_payment: "در انتظار پرداخت",
+   244→    paid: "پرداخت ثبت شد",
+   245→    confirmed: "تأیید مدیریت",
+   246→    preparing: "در حال آماده‌سازی",
+   247→    shipped: "تحویل به پست",
+   248→    delivered: "تحویل داده شد",
+   249→    cancelled: "لغو شد",
+   250→  };
+   251→  const statusCounts: Record<string, number> = {};
+   252→  for (const k of ALL_STATUS_KEYS) statusCounts[k] = 0;
+   253→  for (const o of orders) {
+   254→    if (statusCounts[o.orderStatus] !== undefined) {
+   255→      statusCounts[o.orderStatus]++;
+   256→    }
+   257→  }
+   258→  const orderStatusDistribution = ALL_STATUS_KEYS.map((status) => ({
+   259→    status: statusLabels[status] || status,
+   260→    count: statusCounts[status] || 0,
+   261→  }));
+   262→
+   263→  // Top products aggregated across all orders — sorted by revenue (total)
+   264→  // descending so the dashboard bar chart shows the highest earners first.
+   265→  const productAgg: Record<string, { quantity: number; total: number }> = {};
+   266→  for (const o of orders) {
+   267→    for (const item of o.items) {
+   268→      if (!productAgg[item.productName]) {
+   269→        productAgg[item.productName] = { quantity: 0, total: 0 };
+   270→      }
+   271→      productAgg[item.productName].quantity += item.quantity;
+   272→      productAgg[item.productName].total += item.total;
+   273→    }
+   274→  }
+   275→  const topProducts = Object.entries(productAgg)
+   276→    .map(([productName, v]) => ({ productName, ...v }))
+   277→    .sort((a, b) => b.total - a.total)
+   278→    .slice(0, 5);
+   279→
+   280→  // Recent orders (last 5) — return raw English status keys so the badge
+   281→  // components can map them to Persian labels themselves. The previous
+   282→  // implementation mapped keys → Persian here, then the dashboard re-mapped
+   283→  // Persian → keys, which was both lossy and fragile.
+   284→  const recentOrders = orders.slice(0, 5).map((o) => ({
+   285→    id: o.id,
+   286→    orderNumber: o.orderNumber,
+   287→    finalAmount: o.finalAmount,
+   288→    orderStatus: o.orderStatus,
+   289→    paymentStatus: o.paymentStatus,
+   290→    createdAt: o.createdAt.toISOString(),
+   291→  }));
+   292→
+   293→  return {
+   294→    totalOrders,
+   295→    totalSales,
+   296→    totalCommission,
+   297→    balance: agent.balance,
+   298→    commissionRate: agent.commissionRate,
+   299→    pendingOrders,
+   300→    thisWeekSales,
+   301→    thisMonthSales,
+   302→    weekGrowthPct,
+   303→    monthGrowthPct,
+   304→    weeklySeries,
+   305→    monthlySeries,
+   306→    orderStatusDistribution,
+   307→    topProducts,
+   308→    recentOrders,
+   309→  };
+   310→}
+   311→
+   312→// ── Admin stats ───────────────────────────────────────────────────────
+   313→export interface AdminStats {
+   314→  // Summary
+   315→  totalAgents: number;
+   316→  activeAgents: number;
+   317→  pendingAgents: number;
+   318→  blockedAgents: number;
+   319→  totalOrders: number; // lifetime order count
+   320→  agentOrders: number; // lifetime
+   321→  customerOrders: number; // lifetime
+   322→  totalRevenue: number; // revenue in selected period (confirmed)
+   323→  agentRevenue: number; // agent revenue in selected period
+   324→  customerRevenue: number; // customer revenue in selected period
+   325→  totalCommissionPaid: number;
+   326→  // This period snapshots (always "this week" / "this month", regardless of period filter)
+   327→  thisWeekRevenue: number;
+   328→  thisMonthRevenue: number;
+   329→  weekGrowthPct: number | null;
+   330→  monthGrowthPct: number | null;
+   331→  // Period filter metadata
+   332→  period: ReportPeriod;
+   333→  periodLabel: string; // Persian label, e.g. "ماهیانه"
+   334→  periodOrders: number; // # of orders in the selected period (any status)
+   335→  periodRangeStart: string; // ISO date — inclusive start
+   336→  periodRangeEnd: string; // ISO date — exclusive end (now)
+   337→  // Charts
+   338→  weeklyRevenueSeries: { label: string; revenue: number; orders: number }[];
+   339→  monthlyRevenueSeries: { label: string; revenue: number; orders: number }[];
+   340→  weeklySeriesLabel: string; // Persian label describing the weekly series granularity
+   341→  monthlySeriesLabel: string; // Persian label describing the monthly series granularity
+   342→  topAgents: {
+   343→    id: string;
+   344→    name: string;
+   345→    storeName: string;
+   346→    totalOrders: number;
+   347→    totalSales: number;
+   348→  }[];
+   349→  topProducts: { productName: string; quantity: number; total: number }[];
+   350→  orderStatusDistribution: { status: string; count: number }[];
+   351→  recentAgents: {
+   352→    id: string;
+   353→    name: string;
+   354→    storeName: string;
+   355→    phone: string;
+   356→    status: string;
+   357→    createdAt: string;
+   358→  }[];
+   359→  recentOrders: {
+   360→    id: string;
+   361→    orderNumber: string;
+   362→    customerName: string;
+   363→    finalAmount: number;
+   364→    orderType: string;
+   365→    orderStatus: string;
+   366→    paymentStatus: string;
+   367→    createdAt: string;
+   368→  }[];
+   369→}
+   370→
+   371→export async function computeAdminStats(
+   372→  opts: { period?: ReportPeriod } = {}
+   373→): Promise<AdminStats> {
+   374→  const period: ReportPeriod = opts.period ?? "monthly";
+   375→  const periodDays =
+   376→    period === "weekly" ? 7 : period === "monthly" ? 30 : 365;
+   377→  const periodLabel =
+   378→    period === "weekly"
+   379→      ? "هفتگی"
+   380→      : period === "monthly"
+   381→      ? "ماهیانه"
+   382→      : "سالیانه";
+   383→
+   384→  // Agent counts
+   385→  const agents = await db.agent.findMany({
+   386→    select: {
+   387→      id: true,
+   388→      name: true,
+   389→      storeName: true,
+   390→      phone: true,
+   391→      status: true,
+   392→      commissionRate: true,
+   393→      balance: true,
+   394→      totalSales: true,
+   395→      totalOrders: true,
+   396→      createdAt: true,
+   397→    },
+   398→  });
+   399→  const totalAgents = agents.length;
+   400→  const activeAgents = agents.filter((a) => a.status === "active").length;
+   401→  const pendingAgents = agents.filter((a) => a.status === "pending").length;
+   402→  const blockedAgents = agents.filter((a) => a.status === "blocked").length;
+   403→
+   404→  // All orders (lifetime, for series + recent activity)
+   405→  const orders = await db.order.findMany({
+   406→    select: {
+   407→      id: true,
+   408→      orderNumber: true,
+   409→      customerName: true,
+   410→      finalAmount: true,
+   411→      orderType: true,
+   412→      orderStatus: true,
+   413→      paymentStatus: true,
+   414→      createdAt: true,
+   415→      agent: { select: { id: true, name: true, storeName: true } },
+   416→      items: { select: { productName: true, quantity: true, total: true } },
+   417→    },
+   418→    orderBy: { createdAt: "desc" },
+   419→  });
+   420→  const totalOrders = orders.length;
+   421→  const agentOrders = orders.filter((o) => o.orderType === "agent").length;
+   422→  const customerOrders = orders.filter((o) => o.orderType === "customer").length;
+   423→
+   424→  // Commission paid (lifetime — based on agent's stored totalSales)
+   425→  const totalCommissionPaid = agents.reduce(
+   426→    (s, a) => s + Math.round((a.totalSales * a.commissionRate) / 100),
+   427→    0
+   428→  );
+   429→
+   430→  // Period filter — affects revenue totals, top products, top agents,
+   431→  // status distribution. Snapshot stats (thisWeek/Month) stay lifetime.
+   432→  const now = new Date();
+   433→  const periodStart = new Date(now);
+   434→  periodStart.setDate(periodStart.getDate() - (periodDays - 1));
+   435→  periodStart.setHours(0, 0, 0, 0);
+   436→
+   437→  const periodOrders = orders.filter(
+   438→    (o) => new Date(o.createdAt) >= periodStart
+   439→  );
+   440→  const periodConfirmed = periodOrders.filter(
+   441→    (o) => o.paymentStatus === "confirmed"
+   442→  );
+   443→  const totalRevenue = periodConfirmed.reduce((s, o) => s + o.finalAmount, 0);
+   444→  const agentRevenue = periodConfirmed
+   445→    .filter((o) => o.orderType === "agent")
+   446→    .reduce((s, o) => s + o.finalAmount, 0);
+   447→  const customerRevenue = totalRevenue - agentRevenue;
+   448→
+   449→  // This period snapshots — always "this week" / "this month" regardless
+   450→  // of the period filter
+   451→  const weekStart = getStartOfWeek();
+   452→  const monthStart = getStartOfMonth();
+   453→  const lastWeekStart = new Date(weekStart);
+   454→  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+   455→  const lastMonthStart = new Date(monthStart);
+   456→  lastMonthStart.setMonth(lastMonthStart.getMonth() - 1);
+   457→
+   458→  const confirmedOrders = orders.filter((o) => o.paymentStatus === "confirmed");
+   459→  const thisWeekRevenue = confirmedOrders
+   460→    .filter((o) => new Date(o.createdAt) >= weekStart)
+   461→    .reduce((s, o) => s + o.finalAmount, 0);
+   462→  const thisMonthRevenue = confirmedOrders
+   463→    .filter((o) => new Date(o.createdAt) >= monthStart)
+   464→    .reduce((s, o) => s + o.finalAmount, 0);
+   465→  const lastWeekRevenue = confirmedOrders
+   466→    .filter(
+   467→      (o) =>
+   468→        new Date(o.createdAt) >= lastWeekStart &&
+   469→        new Date(o.createdAt) < weekStart
+   470→    )
+   471→    .reduce((s, o) => s + o.finalAmount, 0);
+   472→  const lastMonthRevenue = confirmedOrders
+   473→    .filter(
+   474→      (o) =>
+   475→        new Date(o.createdAt) >= lastMonthStart &&
+   476→        new Date(o.createdAt) < monthStart
+   477→    )
+   478→    .reduce((s, o) => s + o.finalAmount, 0);
+   479→
+   480→  const weekGrowthPct =
+   481→    lastWeekRevenue > 0
+   482→      ? Math.round(((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue) * 100)
+   483→      : thisWeekRevenue > 0
+   484→      ? 100
+   485→      : null;
+   486→  const monthGrowthPct =
+   487→    lastMonthRevenue > 0
+   488→      ? Math.round(((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100)
+   489→      : thisMonthRevenue > 0
+   490→      ? 100
+   491→      : null;
+   492→
+   493→  const monthNames = [
+   494→    "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+   495→    "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند",
+   496→  ];
+   497→  const dayNames = [
+   498→    "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه",
+   499→  ];
+   500→  function jalaliMonthLabel(gDate: Date): string {
+   501→    // Approximate Jalali month index from Gregorian — good enough for chart labels
+   502→    let jIdx = (gDate.getMonth() - 2 + 12) % 12;
+   503→    if (gDate.getMonth() < 2) jIdx = (gDate.getMonth() + 10) % 12;
+   504→    return monthNames[jIdx];
+   505→  }
+   506→
+   507→  // Weekly & monthly series — adjusted per period:
+   508→  //  - weekly   → weeklyRevenueSeries = daily for last 7 days
+   509→  //               monthlyRevenueSeries = weekly for last 8 weeks
+   510→  //  - monthly  → weeklyRevenueSeries = weekly for last 8 weeks (default)
+   511→  //               monthlyRevenueSeries = monthly for last 6 months (default)
+   512→  //  - yearly   → weeklyRevenueSeries = monthly for last 12 months
+   513→  //               monthlyRevenueSeries = quarterly for last 4 quarters
+   514→  const weeklyRevenueSeries: {
+   515→    label: string;
+   516→    revenue: number;
+   517→    orders: number;
+   518→  }[] = [];
+   519→  const monthlyRevenueSeries: {
+   520→    label: string;
+   521→    revenue: number;
+   522→    orders: number;
+   523→  }[] = [];
+   524→  let weeklySeriesLabel = "روند درآمد هفتگی";
+   525→  let monthlySeriesLabel = "مقایسه درآمد ماهانه";
+   526→
+   527→  if (period === "weekly") {
+   528→    // Daily for last 7 days
+   529→    weeklySeriesLabel = "روند درآمد روزانه (۷ روز اخیر)";
+   530→    for (let i = 6; i >= 0; i--) {
+   531→      const dStart = new Date(now);
+   532→      dStart.setDate(dStart.getDate() - i);
+   533→      dStart.setHours(0, 0, 0, 0);
+   534→      const dEnd = new Date(dStart);
+   535→      dEnd.setDate(dEnd.getDate() + 1);
+   536→      const dOrders = orders.filter((o) => {
+   537→        const d = new Date(o.createdAt);
+   538→        return d >= dStart && d < dEnd;
+   539→      });
+   540→      const revenue = dOrders
+   541→        .filter((o) => o.paymentStatus === "confirmed")
+   542→        .reduce((s, o) => s + o.finalAmount, 0);
+   543→      weeklyRevenueSeries.push({
+   544→        label: dayNames[dStart.getDay()],
+   545→        revenue,
+   546→        orders: dOrders.length,
+   547→      });
+   548→    }
+   549→    // Weekly for last 8 weeks (coarse)
+   550→    monthlySeriesLabel = "روند درآمد هفتگی (۸ هفته اخیر)";
+   551→    for (let i = 7; i >= 0; i--) {
+   552→      const wStart = new Date(weekStart);
+   553→      wStart.setDate(wStart.getDate() - i * 7);
+   554→      const wEnd = new Date(wStart);
+   555→      wEnd.setDate(wEnd.getDate() + 7);
+   556→      const wOrders = orders.filter((o) => {
+   557→        const d = new Date(o.createdAt);
+   558→        return d >= wStart && d < wEnd;
+   559→      });
+   560→      const revenue = wOrders
+   561→        .filter((o) => o.paymentStatus === "confirmed")
+   562→        .reduce((s, o) => s + o.finalAmount, 0);
+   563→      monthlyRevenueSeries.push({
+   564→        label: `هفته ${toPersianDigits(8 - i)}`,
+   565→        revenue,
+   566→        orders: wOrders.length,
+   567→      });
+   568→    }
+   569→  } else if (period === "yearly") {
+   570→    // Monthly for last 12 months (fine)
+   571→    weeklySeriesLabel = "روند درآمد ماهانه (۱۲ ماه اخیر)";
+   572→    for (let i = 11; i >= 0; i--) {
+   573→      const mStart = new Date(monthStart);
+   574→      mStart.setMonth(mStart.getMonth() - i);
+   575→      const mEnd = new Date(mStart);
+   576→      mEnd.setMonth(mEnd.getMonth() + 1);
+   577→      const mOrders = orders.filter((o) => {
+   578→        const d = new Date(o.createdAt);
+   579→        return d >= mStart && d < mEnd;
+   580→      });
+   581→      const revenue = mOrders
+   582→        .filter((o) => o.paymentStatus === "confirmed")
+   583→        .reduce((s, o) => s + o.finalAmount, 0);
+   584→      weeklyRevenueSeries.push({
+   585→        label: jalaliMonthLabel(mStart),
+   586→        revenue,
+   587→        orders: mOrders.length,
+   588→      });
+   589→    }
+   590→    // Quarterly for last 4 quarters (coarse)
+   591→    monthlySeriesLabel = "روند درآمد فصلانه (۴ فصل اخیر)";
+   592→    for (let q = 3; q >= 0; q--) {
+   593→      const qEnd = new Date();
+   594→      qEnd.setMonth(qEnd.getMonth() - q * 3);
+   595→      const qStart = new Date(qEnd);
+   596→      qStart.setMonth(qStart.getMonth() - 3);
+   597→      const qOrders = orders.filter((o) => {
+   598→        const d = new Date(o.createdAt);
+   599→        return d >= qStart && d < qEnd;
+   600→      });
+   601→      const revenue = qOrders
+   602→        .filter((o) => o.paymentStatus === "confirmed")
+   603→        .reduce((s, o) => s + o.finalAmount, 0);
+   604→      monthlyRevenueSeries.push({
+   605→        label: `فصل ${toPersianDigits(4 - q)}`,
+   606→        revenue,
+   607→        orders: qOrders.length,
+   608→      });
+   609→    }
+   610→  } else {
+   611→    // monthly (default) — same as before
+   612→    weeklySeriesLabel = "روند درآمد هفتگی (۸ هفته اخیر)";
+   613→    for (let i = 7; i >= 0; i--) {
+   614→      const wStart = new Date(weekStart);
+   615→      wStart.setDate(wStart.getDate() - i * 7);
+   616→      const wEnd = new Date(wStart);
+   617→      wEnd.setDate(wEnd.getDate() + 7);
+   618→      const wOrders = orders.filter((o) => {
+   619→        const d = new Date(o.createdAt);
+   620→        return d >= wStart && d < wEnd;
+   621→      });
+   622→      const revenue = wOrders
+   623→        .filter((o) => o.paymentStatus === "confirmed")
+   624→        .reduce((s, o) => s + o.finalAmount, 0);
+   625→      weeklyRevenueSeries.push({
+   626→        label: `هفته ${toPersianDigits(8 - i)}`,
+   627→        revenue,
+   628→        orders: wOrders.length,
+   629→      });
+   630→    }
+   631→    monthlySeriesLabel = "روند درآمد ماهانه (۶ ماه اخیر)";
+   632→    for (let i = 5; i >= 0; i--) {
+   633→      const mStart = new Date(monthStart);
+   634→      mStart.setMonth(mStart.getMonth() - i);
+   635→      const mEnd = new Date(mStart);
+   636→      mEnd.setMonth(mEnd.getMonth() + 1);
+   637→      const mOrders = orders.filter((o) => {
+   638→        const d = new Date(o.createdAt);
+   639→        return d >= mStart && d < mEnd;
+   640→      });
+   641→      const revenue = mOrders
+   642→        .filter((o) => o.paymentStatus === "confirmed")
+   643→        .reduce((s, o) => s + o.finalAmount, 0);
+   644→      monthlyRevenueSeries.push({
+   645→        label: jalaliMonthLabel(mStart),
+   646→        revenue,
+   647→        orders: mOrders.length,
+   648→      });
+   649→    }
+   650→  }
+   651→
+   652→  // Top agents — by sales in the period (re-computed from period orders)
+   653→  const agentSalesAgg: Record<
+   654→    string,
+   655→    { id: string; name: string; storeName: string; totalOrders: number; totalSales: number }
+   656→  > = {};
+   657→  for (const a of agents) {
+   658→    if (!agentSalesAgg[a.id]) {
+   659→      agentSalesAgg[a.id] = {
+   660→        id: a.id,
+   661→        name: a.name,
+   662→        storeName: a.storeName,
+   663→        totalOrders: 0,
+   664→        totalSales: 0,
+   665→      };
+   666→    }
+   667→  }
+   668→  for (const o of periodConfirmed) {
+   669→    if (o.orderType !== "agent") continue;
+   670→    const aid = (o.agent as { id?: string } | null)?.id;
+   671→    if (!aid || !agentSalesAgg[aid]) continue;
+   672→    agentSalesAgg[aid].totalOrders += 1;
+   673→    agentSalesAgg[aid].totalSales += o.finalAmount;
+   674→  }
+   675→  const topAgents = Object.values(agentSalesAgg)
+   676→    .sort((a, b) => b.totalSales - a.totalSales)
+   677→    .slice(0, 5)
+   678→    // Fall back to lifetime totals if all period sales are zero
+   679→    .map((a) =>
+   680→      a.totalSales === 0
+   681→        ? {
+   682→            ...a,
+   683→            totalOrders: agents.find((x) => x.id === a.id)?.totalOrders ?? 0,
+   684→            totalSales: agents.find((x) => x.id === a.id)?.totalSales ?? 0,
+   685→          }
+   686→        : a
+   687→    );
+   688→
+   689→  // Top products — from period orders (any status, since items reflect activity)
+   690→  const productAgg: Record<string, { quantity: number; total: number }> = {};
+   691→  for (const o of periodOrders) {
+   692→    for (const item of o.items) {
+   693→      if (!productAgg[item.productName]) {
+   694→        productAgg[item.productName] = { quantity: 0, total: 0 };
+   695→      }
+   696→      productAgg[item.productName].quantity += item.quantity;
+   697→      productAgg[item.productName].total += item.total;
+   698→    }
+   699→  }
+   700→  const topProducts = Object.entries(productAgg)
+   701→    .map(([productName, v]) => ({ productName, ...v }))
+   702→    .sort((a, b) => b.quantity - a.quantity)
+   703→    .slice(0, 5);
+   704→
+   705→  // Order status distribution — from period orders only
+   706→  const statusLabels: Record<string, string> = {
+   707→    awaiting_payment: "در انتظار پرداخت",
+   708→    paid: "پرداخت شده",
+   709→    confirmed: "تأیید شده",
+   710→    preparing: "در حال آماده‌سازی",
+   711→    shipped: "ارسال شده",
+   712→    delivered: "تحویل داده شده",
+   713→    cancelled: "لغو شده",
+   714→  };
+   715→  const statusCounts: Record<string, number> = {};
+   716→  for (const o of periodOrders) {
+   717→    statusCounts[o.orderStatus] = (statusCounts[o.orderStatus] || 0) + 1;
+   718→  }
+   719→  const orderStatusDistribution = Object.entries(statusCounts).map(
+   720→    ([status, count]) => ({
+   721→      status: statusLabels[status] || status,
+   722→      count,
+   723→    })
+   724→  );
+   725→
+   726→  // Recent agents (last 5) — lifetime
+   727→  const recentAgents = agents
+   728→    .slice()
+   729→    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+   730→    .slice(0, 5)
+   731→    .map((a) => ({
+   732→      id: a.id,
+   733→      name: a.name,
+   734→      storeName: a.storeName,
+   735→      phone: a.phone,
+   736→      status: a.status,
+   737→      createdAt: a.createdAt.toISOString(),
+   738→    }));
+   739→
+   740→  // Recent orders (last 5) — lifetime
+   741→  const recentOrders = orders.slice(0, 5).map((o) => ({
+   742→    id: o.id,
+   743→    orderNumber: o.orderNumber,
+   744→    customerName: o.customerName,
+   745→    finalAmount: o.finalAmount,
+   746→    orderType: o.orderType,
+   747→    orderStatus: statusLabels[o.orderStatus] || o.orderStatus,
+   748→    paymentStatus: o.paymentStatus === "confirmed" ? "تأیید شده" : "در انتظار",
+   749→    createdAt: o.createdAt.toISOString(),
+   750→  }));
+   751→
+   752→  return {
+   753→    totalAgents,
+   754→    activeAgents,
+   755→    pendingAgents,
+   756→    blockedAgents,
+   757→    totalOrders,
+   758→    agentOrders,
+   759→    customerOrders,
+   760→    totalRevenue,
+   761→    agentRevenue,
+   762→    customerRevenue,
+   763→    totalCommissionPaid,
+   764→    thisWeekRevenue,
+   765→    thisMonthRevenue,
+   766→    weekGrowthPct,
+   767→    monthGrowthPct,
+   768→    period,
+   769→    periodLabel,
+   770→    periodOrders: periodOrders.length,
+   771→    periodRangeStart: periodStart.toISOString(),
+   772→    periodRangeEnd: now.toISOString(),
+   773→    weeklyRevenueSeries,
+   774→    monthlyRevenueSeries,
+   775→    weeklySeriesLabel,
+   776→    monthlySeriesLabel,
+   777→    topAgents,
+   778→    topProducts,
+   779→    orderStatusDistribution,
+   780→    recentAgents,
+   781→    recentOrders,
+   782→  };
+   783→}
+   784→

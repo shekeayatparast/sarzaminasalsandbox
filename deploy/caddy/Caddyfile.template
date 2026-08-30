@@ -1,11 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────
-#  Caddyfile template for سرزمین عسل
+#  Caddyfile template for سرزمین عسل (3X-UI friendly)
 #  Caddy automatically obtains and renews Let's Encrypt SSL certificates.
-#  The {domain} placeholder is replaced by setup.sh with your real domain.
+#
+#  The site address placeholder is replaced by setup.sh based on the
+#  ports actually free on your server:
+#    • example.com          → HTTPS on 443 (needs 80+443 free)
+#    • example.com:8443     → HTTPS on an alternate port (when 443 is
+#                             owned by 3X-UI / xray; cert via port 80)
+#    • http://example.com   → plain HTTP on port 80
+#    • :8080                → plain HTTP on a custom port
+#  setup.sh detects 3X-UI/x-ui/xray and never binds their ports.
 # ─────────────────────────────────────────────────────────────────────
 
-{$DOMAIN} {
-	# Reverse proxy all traffic to the Next.js site (port 3000)
+{$SITE_ADDR} {
+	# Reverse proxy all traffic to the Next.js site (internal port)
 	reverse_proxy localhost:3000
 
 	# Compression

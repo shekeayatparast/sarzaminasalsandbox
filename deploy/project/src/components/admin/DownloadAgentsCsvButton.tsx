@@ -16,7 +16,6 @@ interface AgentRow {
   address: string;
   nationalId: string | null;
   status: string;
-  commissionRate: number;
   balance: number;
   totalSales: number;
   totalOrders: number;
@@ -84,7 +83,6 @@ export function DownloadAgentsCsvButton() {
         "آدرس",
         "کد ملی",
         "وضعیت",
-        "نرخ پورسانت",
         "موجودی",
         "فروش کل",
         "تعداد سفارش",
@@ -104,7 +102,6 @@ export function DownloadAgentsCsvButton() {
           a.address,
           a.nationalId || "",
           statusFa(a.status),
-          a.commissionRate,
           a.balance,
           a.totalSales,
           a.totalOrders,

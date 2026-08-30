@@ -46,7 +46,6 @@ export interface AgentProfileData {
   city: string;
   address: string;
   nationalId: string | null;
-  commissionRate: number;
   balance: number;
   totalSales: number;
   totalOrders: number;
@@ -229,8 +228,10 @@ export function ProfileForm({
               <p className="font-bold text-green-600">تأیید شده</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">نرخ پورسانت</p>
-              <p className="font-bold">{toPersianDigits(agent.commissionRate)}٪</p>
+              <p className="text-xs text-muted-foreground">موجودی حساب</p>
+              <p className="font-bold">
+                {toPersianDigits(agent.balance.toLocaleString("en-US"))} تومان
+              </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">کل سفارش‌ها</p>

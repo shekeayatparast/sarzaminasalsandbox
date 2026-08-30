@@ -1,0 +1,718 @@
+    69→  const [orderCopied, setOrderCopied] = useState(false);
+    70→
+    71→  // form state
+    72→  const [name, setName] = useState("");
+    73→  const [phone, setPhone] = useState("");
+    74→  const [province, setProvince] = useState("");
+    75→  const [city, setCity] = useState("");
+    76→  const [address, setAddress] = useState("");
+    77→  const [notes, setNotes] = useState("");
+    78→
+    79→  // order result
+    80→  const [orderResult, setOrderResult] = useState<{
+    81→    orderNumber: string;
+    82→    totalAmount: number;
+    83→    uniqueAmount: number;
+    84→    finalAmount: number;
+    85→    deliveryType: string;
+    86→  } | null>(null);
+    87→
+    88→  const subtotal = totalAmount();
+    89→  const totalKgVal = totalKg();
+    90→  const bonus = bonusKg();
+    91→  const isShahrekord = city.trim() === FREE_DELIVERY_CITY;
+    92→
+    93→  const copyCard = () => {
+    94→    navigator.clipboard.writeText(PAYMENT_CARD_NUMBER.replace(/\s/g, ""));
+    95→    setCopied(true);
+    96→    toast.success("شماره کارت کپی شد");
+    97→    setTimeout(() => setCopied(false), 2000);
+    98→  };
+    99→
+   100→  const copyOrderNumber = () => {
+   101→    if (!orderResult) return;
+   102→    navigator.clipboard.writeText(orderResult.orderNumber);
+   103→    setOrderCopied(true);
+   104→    toast.success("شماره سفارش کپی شد");
+   105→    setTimeout(() => setOrderCopied(false), 2000);
+   106→  };
+   107→
+   108→  const submitOrder = async () => {
+   109→    if (!name.trim()) return toast.error("نام و نام خانوادگی را وارد کنید");
+   110→    if (!phone.trim() || phone.replace(/\D/g, "").length < 10)
+   111→      return toast.error("شماره تماس معتبر وارد کنید");
+   112→    if (!province) return toast.error("استان را انتخاب کنید");
+   113→    if (!city) return toast.error("شهر را انتخاب کنید");
+   114→    if (items.length === 0) return toast.error("سبد خرید خالی است");
+   115→
+   116→    setSubmitting(true);
+   117→    try {
+   118→      const res = await fetch("/api/orders", {
+   119→        method: "POST",
+   120→        headers: { "Content-Type": "application/json" },
+   121→        body: JSON.stringify({
+   122→          customerName: name,
+   123→          customerPhone: phone,
+   124→          province,
+   125→          city,
+   126→          address,
+   127→          notes,
+   128→          items: items.map((i) => ({
+   129→            productId: i.productId,
+   130→            productName: i.productName,
+   131→            containerSize: i.containerSize,
+   132→            hasWax: i.hasWax,
+   133→            isWholesale: i.isWholesale,
+   134→            quantity: i.quantity,
+   135→            unitPrice: i.unitPrice,
+   136→          })),
+   137→          totalAmount: subtotal,
+   138→        }),
+   139→      });
+   140→      const data = await res.json();
+   141→      if (!res.ok) throw new Error(data.error || "خطا در ثبت سفارش");
+   142→      setOrderResult(data);
+   143→      setStep("payment");
+   144→      window.scrollTo({ top: 0, behavior: "smooth" });
+   145→      toast.success("سفارش شما ثبت شد!");
+   146→    } catch (e: any) {
+   147→      toast.error(e.message || "خطا در ثبت سفارش");
+   148→    } finally {
+   149→      setSubmitting(false);
+   150→    }
+   151→  };
+   152→
+   153→  const confirmPayment = async () => {
+   154→    if (!orderResult) return;
+   155→    setConfirming(true);
+   156→    try {
+   157→      const res = await fetch("/api/orders/confirm", {
+   158→        method: "POST",
+   159→        headers: { "Content-Type": "application/json" },
+   160→        body: JSON.stringify({ orderNumber: orderResult.orderNumber }),
+   161→      });
+   162→      const data = await res.json();
+   163→      if (!res.ok) throw new Error(data.error);
+   164→      setStep("success");
+   165→      clearCart();
+   166→      window.scrollTo({ top: 0, behavior: "smooth" });
+   167→      toast.success("پرداخت شما با موفقیت ثبت شد");
+   168→    } catch (e: any) {
+   169→      toast.error(e.message || "خطا در تأیید پرداخت");
+   170→    } finally {
+   171→      setConfirming(false);
+   172→    }
+   173→  };
+   174→
+   175→  // ===== Empty cart =====
+   176→  if (items.length === 0 && step === "cart") {
+   177→    return (
+   178→      <div className="bg-cream-gradient min-h-[60vh] flex items-center justify-center py-16">
+   179→        <div className="text-center max-w-md mx-auto px-4">
+   180→          <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-honey-light/30 flex items-center justify-center">
+   181→            <ShoppingBasket className="w-12 h-12 text-honey" />
+   182→          </div>
+   183→          <h2 className="text-2xl font-extrabold text-honey-dark mb-2">
+   184→            سبد خرید شما خالی است
+   185→          </h2>
+   186→          <p className="text-muted-foreground mb-6">
+   187→            برای شروع خرید، محصولات ما را بررسی کنید و عسل مورد علاقه‌تان را
+   188→            انتخاب نمایید.
+   189→          </p>
+   190→          <Button
+   191→            onClick={() => navigate("products")}
+   192→            className="bg-honey-gradient text-primary-foreground hover:opacity-90 h-12 px-8 text-base font-bold"
+   193→          >
+   194→            مشاهده محصولات
+   195→          </Button>
+   196→        </div>
+   197→      </div>
+   198→    );
+   199→  }
+   200→
+   201→  // ===== Success step =====
+   202→  if (step === "success" && orderResult) {
+   203→    return (
+   204→      <div className="bg-cream-gradient min-h-[60vh] py-12">
+   205→        <div className="container mx-auto px-4 max-w-2xl">
+   206→          <Card className="p-8 md:p-10 text-center shadow-lg border-honey/30">
+   207→            <div className="w-20 h-20 mx-auto mb-5 rounded-full bg-honey-gradient flex items-center justify-center">
+   208→              <Check className="w-10 h-10 text-primary-foreground" />
+   209→            </div>
+   210→            <h2 className="text-2xl md:text-3xl font-extrabold text-honey-dark mb-3">
+   211→              سفارش شما با موفقیت ثبت شد!
+   212→            </h2>
+   213→            <p className="text-muted-foreground mb-6 leading-relaxed">
+   214→              از خرید شما سپاسگزاریم. اطلاعیه پرداخت شما برای مدیریت ارسال
+   215→              شد. پس از تأیید نهایی، کارشناسان ما با شما تماس خواهند گرفت و
+   216→              جزئیات ارسال را هماهنگ می‌کنند.
+   217→            </p>
+   218→            <div className="bg-muted/50 rounded-xl p-4 mb-6">
+   219→              <div className="text-sm text-muted-foreground mb-1">
+   220→                شماره سفارش شما
+   221→              </div>
+   222→              <div className="text-2xl font-extrabold text-honey-dark tracking-wider">
+   223→                {toPersianDigits(orderResult.orderNumber)}
+   224→              </div>
+   225→            </div>
+   226→            <div className="flex flex-wrap gap-3 justify-center">
+   227→              <Button
+   228→                onClick={() => navigate("products")}
+   229→                className="bg-honey-gradient text-primary-foreground hover:opacity-90"
+   230→              >
+   231→                خرید بیشتر
+   232→              </Button>
+   233→              <Button variant="outline" onClick={() => navigate("home")}>
+   234→                بازگشت به خانه
+   235→              </Button>
+   236→            </div>
+   237→          </Card>
+   238→        </div>
+   239→      </div>
+   240→    );
+   241→  }
+   242→
+   243→  // ===== Payment step =====
+   244→  if (step === "payment" && orderResult) {
+   245→    return (
+   246→      <div className="bg-cream-gradient min-h-[60vh] py-8 md:py-12">
+   247→        <div className="container mx-auto px-4 max-w-3xl">
+   248→          <Button
+   249→            variant="ghost"
+   250→            onClick={() => setStep("cart")}
+   251→            className="mb-4 text-muted-foreground"
+   252→          >
+   253→            <ArrowLeft className="w-4 h-4 ml-1" />
+   254→            بازگشت به سبد
+   255→          </Button>
+   256→
+   257→          <h1 className="text-2xl md:text-3xl font-extrabold text-honey-dark mb-2">
+   258→            پرداخت سفارش
+   259→          </h1>
+   260→          <p className="text-muted-foreground mb-6">
+   261→            سفارش شما ثبت شد. لطفاً مبلغ نهایی را کارت‌به‌کارت کنید و سپس
+   262→            دکمه تأیید پرداخت را بزنید.
+   263→          </p>
+   264→
+   265→          {/* Order number */}
+   266→          <Card className="p-5 mb-6 border-honey/30 bg-honey-light/10">
+   267→            <div className="flex items-center justify-between flex-wrap gap-2">
+   268→              <div>
+   269→                <div className="text-sm text-muted-foreground">
+   270→                  شماره سفارش
+   271→                </div>
+   272→                <div className="text-xl font-extrabold text-honey-dark">
+   273→                  {toPersianDigits(orderResult.orderNumber)}
+   274→                </div>
+   275→              </div>
+   276→              <Button
+   277→                size="sm"
+   278→                variant="outline"
+   279→                onClick={copyOrderNumber}
+   280→                className="border-honey text-honey-dark hover:bg-honey hover:text-primary-foreground"
+   281→              >
+   282→                {orderCopied ? (
+   283→                  <Check className="w-4 h-4 ml-1" />
+   284→                ) : (
+   285→                  <Copy className="w-4 h-4 ml-1" />
+   286→                )}
+   287→                {orderCopied ? "کپی شد" : "کپی شماره سفارش"}
+   288→              </Button>
+   289→            </div>
+   290→          </Card>
+   291→
+   292→          <div className="grid md:grid-cols-2 gap-5">
+   293→            {/* Payment card */}
+   294→            <Card className="p-5 md:col-span-2">
+   295→              <div className="flex items-center gap-2 mb-4">
+   296→                <CreditCard className="w-5 h-5 text-honey" />
+   297→                <h2 className="font-bold text-lg text-honey-dark">
+   298→                  اطلاعات پرداخت
+   299→                </h2>
+   300→              </div>
+   301→
+   302→              <div className="rounded-xl bg-honey-dark text-primary-foreground p-5 mb-4">
+   303→                <div className="text-xs text-primary-foreground/70 mb-1">
+   304→                  شماره کارت (کارت‌به‌کارت)
+   305→                </div>
+   306→                <div className="flex items-center justify-between gap-2 flex-wrap">
+   307→                  <div
+   308→                    dir="ltr"
+   309→                    className="font-mono text-xl md:text-2xl tracking-wider"
+   310→                  >
+   311→                    {PAYMENT_CARD_NUMBER}
+   312→                  </div>
+   313→                  <Button
+   314→                    size="sm"
+   315→                    variant="secondary"
+   316→                    onClick={copyCard}
+   317→                    className="bg-primary-foreground/15 hover:bg-primary-foreground/25 text-primary-foreground border-0"
+   318→                  >
+   319→                    {copied ? (
+   320→                      <Check className="w-4 h-4 ml-1" />
+   321→                    ) : (
+   322→                      <Copy className="w-4 h-4 ml-1" />
+   323→                    )}
+   324→                    {copied ? "کپی شد" : "کپی"}
+   325→                  </Button>
+   326→                </div>
+   327→                <div className="text-sm text-primary-foreground/80 mt-2">
+   328→                  به نام: {PAYMENT_CARD_HOLDER}
+   329→                </div>
+   330→              </div>
+   331→
+   332→              {/* Itemized breakdown */}
+   333→              <div className="space-y-3 text-sm">
+   334→                <div className="font-bold text-foreground mb-1">
+   335→                  ریز اقلام سفارش
+   336→                </div>
+   337→                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+   338→                  {items.map((item) => (
+   339→                    <div
+   340→                      key={item.id}
+   341→                      className="flex items-start justify-between gap-2 py-2 border-b border-border/40 last:border-0"
+   342→                    >
+   343→                      <div className="flex-1 min-w-0">
+   344→                        <div className="font-medium text-foreground">
+   345→                          {item.productName}
+   346→                        </div>
+   347→                        <div className="text-xs text-muted-foreground mt-0.5">
+   348→                          {item.containerLabel}
+   349→                          {item.hasWax && " • با موم عسل"}
+   350→                          {" • "}
+   351→                          {toPersianDigits(item.quantity)} عدد
+   352→                          {" • "}
+   353→                          {toPersianDigits(item.containerSize * item.quantity)}{" "}
+   354→                          کیلو
+   355→                        </div>
+   356→                      </div>
+   357→                      <div className="text-left shrink-0">
+   358→                        <div className="font-bold text-honey-dark">
+   359→                          {formatToman(item.unitPrice * item.quantity)}
+   360→                        </div>
+   361→                        <div className="text-[10px] text-muted-foreground">
+   362→                          {formatToman(item.unitPrice)} ×{" "}
+   363→                          {toPersianDigits(item.quantity)}
+   364→                        </div>
+   365→                      </div>
+   366→                    </div>
+   367→                  ))}
+   368→                </div>
+   369→                <div className="flex justify-between text-muted-foreground pt-1">
+   370→                  <span>جمع کالاها</span>
+   371→                  <span>{formatToman(orderResult.totalAmount)}</span>
+   372→                </div>
+   373→                <div className="flex justify-between text-muted-foreground">
+   374→                  <span>مبلغ یکتای پیگیری</span>
+   375→                  <span className="text-honey-dark font-medium">
+   376→                    +{toPersianDigits(orderResult.uniqueAmount)} تومان
+   377→                  </span>
+   378→                </div>
+   379→                <Separator className="my-1" />
+   380→                <div className="flex justify-between items-center bg-accent/50 rounded-lg p-3">
+   381→                  <div>
+   382→                    <div className="font-bold text-foreground">
+   383→                      مبلغ قابل پرداخت
+   384→                    </div>
+   385→                    <div className="text-xs text-muted-foreground mt-0.5">
+   386→                      به ریال: {formatRial(orderResult.finalAmount)}
+   387→                    </div>
+   388→                  </div>
+   389→                  <div className="text-left">
+   390→                    <div className="font-extrabold text-xl text-honey-dark">
+   391→                      {formatToman(orderResult.finalAmount)}
+   392→                    </div>
+   393→                  </div>
+   394→                </div>
+   395→              </div>
+   396→
+   397→              <div className="mt-4 flex items-start gap-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 text-xs text-foreground/80">
+   398→                <ShieldCheck className="w-4 h-4 text-honey shrink-0 mt-0.5" />
+   399→                <span>
+   400→                  مبلغ{" "}
+   401→                  <b>{toPersianDigits(orderResult.uniqueAmount)} تومان</b>{" "}
+   402→                  به صورت یکتا به سفارش شما اضافه شده تا پرداخت شما در
+   403→                  صورتحساب بانکی سریعاً قابل پیگیری باشد. این مبلغ کمتر از{" "}
+   404→                  {toPersianDigits(1000)} تومان است.
+   405→                </span>
+   406→              </div>
+   407→
+   408→              {orderResult.deliveryType !== "shahrekord" && (
+   409→                <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 text-xs text-foreground/80">
+   410→                  <Truck className="w-4 h-4 text-honey shrink-0 mt-0.5" />
+   411→                  <span>
+   412→                    هزینه پست برای شهر شما جدا از این مبلغ محاسبه می‌شود و
+   413→                    هنگام هماهنگی تلفنی به اطلاع شما خواهد رسید. در فاکتور
+   414→                    ذکر نمی‌گردد.
+   415→                  </span>
+   416→                </div>
+   417→              )}
+   418→            </Card>
+   419→          </div>
+   420→
+   421→          {/* Steps */}
+   422→          <Card className="p-5 mt-5">
+   423→            <h3 className="font-bold mb-3 text-honey-dark">مراحل پرداخت:</h3>
+   424→            <ol className="space-y-2 text-sm text-muted-foreground">
+   425→              <li className="flex gap-2">
+   426→                <span className="font-bold text-honey">۱.</span>
+   427→                مبلغ{" "}
+   428→                <b className="text-foreground">
+   429→                  {formatToman(orderResult.finalAmount)}
+   430→                </b>{" "}
+   431→                را به کارت بالا کارت‌به‌کارت کنید.
+   432→              </li>
+   433→              <li className="flex gap-2">
+   434→                <span className="font-bold text-honey">۲.</span>
+   435→                پس از انجام تراکنش، دکمه «تأیید پرداخت» را بزنید.
+   436→              </li>
+   437→              <li className="flex gap-2">
+   438→                <span className="font-bold text-honey">۳.</span>
+   439→                اطلاعیه پرداخت برای مدیریت ارسال می‌شود و پس از تأیید، با
+   440→                شما تماس گرفته می‌شود.
+   441→              </li>
+   442→            </ol>
+   443→          </Card>
+   444→
+   445→          <Button
+   446→            onClick={confirmPayment}
+   447→            disabled={confirming}
+   448→            className="w-full mt-5 bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-md h-14 text-base font-bold"
+   449→          >
+   450→            {confirming ? (
+   451→              <>
+   452→                <Loader2 className="w-5 h-5 ml-2 animate-spin" />
+   453→                در حال ارسال...
+   454→              </>
+   455→            ) : (
+   456→              <>
+   457→                <Check className="w-5 h-5 ml-2" />
+   458→                تأیید پرداخت
+   459→              </>
+   460→            )}
+   461→          </Button>
+   462→        </div>
+   463→      </div>
+   464→    );
+   465→  }
+   466→
+   467→  // ===== Cart step =====
+   468→  const selectedProvince = PROVINCES.find((p) => p.name === province);
+   469→
+   470→  return (
+   471→    <div className="bg-cream-gradient min-h-[60vh] py-8 md:py-12">
+   472→      <div className="container mx-auto px-4 max-w-5xl">
+   473→        <h1 className="text-2xl md:text-3xl font-extrabold text-honey-dark mb-6 flex items-center gap-2">
+   474→          <ShoppingBasket className="w-7 h-7" />
+   475→          سبد خرید و ثبت سفارش
+   476→        </h1>
+   477→
+   478→        <div className="grid lg:grid-cols-3 gap-6">
+   479→          {/* Cart items + form */}
+   480→          <div className="lg:col-span-2 space-y-5">
+   481→            {/* Items */}
+   482→            <Card className="p-4 md:p-5">
+   483→              <h2 className="font-bold text-lg mb-4 text-honey-dark">
+   484→                اقلام سبد ({toPersianDigits(items.length)})
+   485→              </h2>
+   486→              <div className="space-y-3">
+   487→                {items.map((item) => (
+   488→                  <div
+   489→                    key={item.id}
+   490→                    className="flex gap-3 p-3 rounded-xl bg-muted/40 border border-border/50"
+   491→                  >
+   492→                    <img
+   493→                      src={item.image}
+   494→                      alt={item.productName}
+   495→                      className="w-16 h-16 rounded-lg object-cover shrink-0"
+   496→                    />
+   497→                    <div className="flex-1 min-w-0">
+   498→                      <div className="flex items-start justify-between gap-2">
+   499→                        <div>
+   500→                          <h3 className="font-bold text-sm md:text-base text-honey-dark">
+   501→                            {item.productName}
+   502→                          </h3>
+   503→                          <p className="text-xs text-muted-foreground">
+   504→                            {item.containerLabel}
+   505→                          </p>
+   506→                          {item.hasWax && (
+   507→                            <Badge className="mt-1 bg-honey-light/40 text-honey-dark border-0 text-[10px]">
+   508→                              با موم
+   509→                            </Badge>
+   510→                          )}
+   511→                        </div>
+   512→                        <Button
+   513→                          variant="ghost"
+   514→                          size="icon"
+   515→                          className="w-8 h-8 text-muted-foreground hover:text-destructive shrink-0"
+   516→                          onClick={() => removeItem(item.id)}
+   517→                        >
+   518→                          <Trash2 className="w-4 h-4" />
+   519→                        </Button>
+   520→                      </div>
+   521→                      <div className="flex items-center justify-between mt-2 gap-2">
+   522→                        <div className="flex items-center gap-1 bg-background rounded-lg border">
+   523→                          <Button
+   524→                            variant="ghost"
+   525→                            size="icon"
+   526→                            className="w-8 h-8"
+   527→                            onClick={() =>
+   528→                              updateQuantity(item.id, item.quantity - 1)
+   529→                            }
+   530→                          >
+   531→                            <Minus className="w-3.5 h-3.5" />
+   532→                          </Button>
+   533→                          <span className="w-8 text-center font-bold text-sm">
+   534→                            {toPersianDigits(item.quantity)}
+   535→                          </span>
+   536→                          <Button
+   537→                            variant="ghost"
+   538→                            size="icon"
+   539→                            className="w-8 h-8"
+   540→                            onClick={() =>
+   541→                              updateQuantity(item.id, item.quantity + 1)
+   542→                            }
+   543→                          >
+   544→                            <Plus className="w-3.5 h-3.5" />
+   545→                          </Button>
+   546→                        </div>
+   547→                        <div className="text-left">
+   548→                          <div className="font-extrabold text-honey-dark text-sm">
+   549→                            {formatToman(item.unitPrice * item.quantity)}
+   550→                          </div>
+   551→                          <div className="text-[10px] text-muted-foreground">
+   552→                            {formatToman(item.unitPrice)} ×{" "}
+   553→                            {toPersianDigits(item.quantity)}
+   554→                          </div>
+   555→                        </div>
+   556→                      </div>
+   557→                    </div>
+   558→                  </div>
+   559→                ))}
+   560→              </div>
+   561→              {bonus > 0 && (
+   562→                <div className="mt-4 flex items-center gap-2 rounded-xl bg-honey-light/20 border border-honey/30 p-3">
+   563→                  <Gift className="w-5 h-5 text-honey-dark shrink-0" />
+   564→                  <span className="text-sm text-foreground">
+   565→                    🎁 هدیه شما:{" "}
+   566→                    <b className="text-honey-dark">
+   567→                      {toPersianDigits(bonus)} کیلو عسل
+   568→                    </b>{" "}
+   569→                    به همراه سفارش ارسال می‌شود!
+   570→                  </span>
+   571→                </div>
+   572→              )}
+   573→            </Card>
+   574→
+   575→            {/* Customer info form */}
+   576→            <Card className="p-4 md:p-5">
+   577→              <h2 className="font-bold text-lg mb-4 text-honey-dark flex items-center gap-2">
+   578→                <User className="w-5 h-5" />
+   579→                اطلاعات مشتری
+   580→              </h2>
+   581→              <div className="grid sm:grid-cols-2 gap-4">
+   582→                <div className="space-y-1.5">
+   583→                  <Label htmlFor="name">
+   584→                    نام و نام خانوادگی <span className="text-destructive">*</span>
+   585→                  </Label>
+   586→                  <Input
+   587→                    id="name"
+   588→                    value={name}
+   589→                    onChange={(e) => setName(e.target.value)}
+   590→                    placeholder="مثلاً: علی رضایی"
+   591→                  />
+   592→                </div>
+   593→                <div className="space-y-1.5">
+   594→                  <Label htmlFor="phone">
+   595→                    شماره تماس <span className="text-destructive">*</span>
+   596→                  </Label>
+   597→                  <Input
+   598→                    id="phone"
+   599→                    value={phone}
+   600→                    onChange={(e) => setPhone(e.target.value)}
+   601→                    placeholder="مثلاً: ۰۹۱۲۳۴۵۶۷۸۹"
+   602→                    dir="ltr"
+   603→                    inputMode="tel"
+   604→                  />
+   605→                </div>
+   606→              </div>
+   607→            </Card>
+   608→
+   609→            {/* Delivery info */}
+   610→            <Card className="p-4 md:p-5">
+   611→              <h2 className="font-bold text-lg mb-4 text-honey-dark flex items-center gap-2">
+   612→                <MapPin className="w-5 h-5" />
+   613→                محل تحویل
+   614→              </h2>
+   615→              <div className="grid sm:grid-cols-2 gap-4">
+   616→                <div className="space-y-1.5">
+   617→                  <Label>
+   618→                    استان <span className="text-destructive">*</span>
+   619→                  </Label>
+   620→                  <Select value={province} onValueChange={setProvince}>
+   621→                    <SelectTrigger>
+   622→                      <SelectValue placeholder="انتخاب استان" />
+   623→                    </SelectTrigger>
+   624→                    <SelectContent className="max-h-72">
+   625→                      {PROVINCES.map((p) => (
+   626→                        <SelectItem key={p.name} value={p.name}>
+   627→                          {p.name}
+   628→                        </SelectItem>
+   629→                      ))}
+   630→                    </SelectContent>
+   631→                  </Select>
+   632→                </div>
+   633→                <div className="space-y-1.5">
+   634→                  <Label>
+   635→                    شهر <span className="text-destructive">*</span>
+   636→                  </Label>
+   637→                  <Select
+   638→                    value={city}
+   639→                    onValueChange={setCity}
+   640→                    disabled={!selectedProvince}
+   641→                  >
+   642→                    <SelectTrigger>
+   643→                      <SelectValue
+   644→                        placeholder={
+   645→                          selectedProvince
+   646→                            ? "انتخاب شهر"
+   647→                            : "ابتدا استان را انتخاب کنید"
+   648→                        }
+   649→                      />
+   650→                    </SelectTrigger>
+   651→                    <SelectContent className="max-h-72">
+   652→                      {selectedProvince?.cities.map((c) => (
+   653→                        <SelectItem key={c} value={c}>
+   654→                          {c}
+   655→                        </SelectItem>
+   656→                      ))}
+   657→                    </SelectContent>
+   658→                  </Select>
+   659→                </div>
+   660→              </div>
+   661→              <div className="mt-4 space-y-1.5">
+   662→                <Label htmlFor="address">آدرس (اختیاری)</Label>
+   663→                <Textarea
+   664→                  id="address"
+   665→                  value={address}
+   666→                  onChange={(e) => setAddress(e.target.value)}
+   667→                  placeholder="آدرس کامل برای ارسال (در صورت نیاز)"
+   668→                  rows={2}
+   669→                />
+   670→              </div>
+   671→              <div className="mt-4 space-y-1.5">
+   672→                <Label htmlFor="notes">یادداشت (اختیاری)</Label>
+   673→                <Textarea
+   674→                  id="notes"
+   675→                  value={notes}
+   676→                  onChange={(e) => setNotes(e.target.value)}
+   677→                  placeholder="هر توضیح تکمیلی که لازم می‌دانید"
+   678→                  rows={2}
+   679→                />
+   680→              </div>
+   681→
+   682→              {/* Delivery note */}
+   683→              {city && (
+   684→                <div
+   685→                  className={`mt-4 flex items-start gap-2 rounded-lg p-3 text-sm ${
+   686→                    isShahrekord
+   687→                      ? "bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-900"
+   688→                      : "bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900"
+   689→                  }`}
+   690→                >
+   691→                  <Truck className="w-4 h-4 shrink-0 mt-0.5 text-honey" />
+   692→                  <span className="text-foreground/80">
+   693→                    {isShahrekord ? (
+   694→                      <>
+   695→                        ✅ تحویل در شهرکرد <b>رایگان</b> است. هزینه ارسال صفر
+   696→                        می‌باشد.
+   697→                      </>
+   698→                    ) : (
+   699→                      <>
+   700→                        ارسال به شهر شما از طریق پست انجام می‌شود. هزینه پست
+   701→                        جدا از فاکتور محاسبه و هنگام تماس تلفنی اعلام
+   702→                        می‌گردد.
+   703→                      </>
+   704→                    )}
+   705→                  </span>
+   706→                </div>
+   707→              )}
+   708→            </Card>
+   709→          </div>
+   710→
+   711→          {/* Order summary */}
+   712→          <div className="lg:col-span-1">
+   713→            <Card className="p-5 lg:sticky lg:top-24">
+   714→              <h2 className="font-bold text-lg mb-4 text-honey-dark">
+   715→                خلاصه سفارش
+   716→              </h2>
+   717→              <div className="space-y-2 text-sm">
+   718→                <div className="flex justify-between text-muted-foreground">
+   719→                  <span>تعداد اقلام</span>
+   720→                  <span>{toPersianDigits(items.length)}</span>
+   721→                </div>
+   722→                <div className="flex justify-between text-muted-foreground">
+   723→                  <span>مجموع وزن</span>
+   724→                  <span>{toPersianDigits(totalKgVal)} کیلو</span>
+   725→                </div>
+   726→                {bonus > 0 && (
+   727→                  <div className="flex justify-between text-honey-dark">
+   728→                    <span className="flex items-center gap-1">
+   729→                      <Gift className="w-3.5 h-3.5" />
+   730→                      هدیه
+   731→                    </span>
+   732→                    <span>{toPersianDigits(bonus)} کیلو عسل</span>
+   733→                  </div>
+   734→                )}
+   735→                <Separator className="my-2" />
+   736→                <div className="flex justify-between items-center">
+   737→                  <span className="font-bold">مبلغ کل</span>
+   738→                  <span className="font-extrabold text-xl text-honey-dark">
+   739→                    {formatToman(subtotal)}
+   740→                  </span>
+   741→                </div>
+   742→                <div className="text-xs text-muted-foreground text-left mt-1">
+   743→                  معادل {formatRial(subtotal)}
+   744→                </div>
+   745→              </div>
+   746→
+   747→              <div className="mt-4 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground leading-relaxed">
+   748→                💡 به ازای هر {toPersianDigits(BONUS_THRESHOLD_KG)} کیلو خرید
+   749→                غیرعمده، {toPersianDigits(BONUS_AMOUNT_KG)} کیلو عسل هدیه
+   750→                می‌گیرید. مبلغ یکتای پیگیری پس از ثبت سفارش نمایش داده
+   751→                می‌شود.
+   752→              </div>
+   753→
+   754→              <Button
+   755→                onClick={submitOrder}
+   756→                disabled={submitting}
+   757→                className="w-full mt-4 bg-honey-gradient text-primary-foreground hover:opacity-90 shadow-md h-12 text-base font-bold"
+   758→              >
+   759→                {submitting ? (
+   760→                  <>
+   761→                    <Loader2 className="w-5 h-5 ml-2 animate-spin" />
+   762→                    در حال ثبت...
+   763→                  </>
+   764→                ) : (
+   765→                  <>
+   766→                    <Check className="w-5 h-5 ml-2" />
+   767→                    ثبت سفارش
+   768→                  </>
+   769→                )}
+   770→              </Button>
+   771→
+   772→              <Button
+   773→                variant="ghost"
+   774→                onClick={() => navigate("products")}
+   775→                className="w-full mt-2 text-muted-foreground"
+   776→              >
+   777→                ادامه خرید
+   778→              </Button>
+   779→            </Card>
+   780→          </div>
+   781→        </div>
+   782→      </div>
+   783→    </div>
+   784→  );
+   785→}
+   786→

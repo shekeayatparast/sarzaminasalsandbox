@@ -1,5 +1,5 @@
 // GET /api/admin/agents/[id] — get agent details with order history
-// PATCH /api/admin/agents/[id] — update status (approve, block, reject), commission, etc.
+// PATCH /api/admin/agents/[id] — update status (approve, block, reject), etc.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentAdmin } from "@/lib/auth";
@@ -58,7 +58,6 @@ const AgentUpdateSchema = z.object({
   status: z
     .enum(["pending", "active", "blocked", "rejected"])
     .optional(),
-  commissionRate: z.number().int().min(0).max(100).optional(),
   rejectionReason: z.string().max(500).optional(),
 });
 
@@ -108,10 +107,6 @@ export async function PATCH(
       updateData.rejectionReason = data.rejectionReason;
     }
 
-    if (data.commissionRate !== undefined) {
-      updateData.commissionRate = data.commissionRate;
-    }
-
     const updated = await db.agent.update({
       where: { id },
       data: updateData,
@@ -120,7 +115,6 @@ export async function PATCH(
         name: true,
         storeName: true,
         status: true,
-        commissionRate: true,
         approvedAt: true,
         rejectionReason: true,
       },

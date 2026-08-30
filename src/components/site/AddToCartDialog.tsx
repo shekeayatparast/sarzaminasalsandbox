@@ -68,7 +68,7 @@ export function AddToCartDialog({
       isWholesale: container.isWholesale,
       quantity: qty,
       unitPrice,
-      image: product.image,
+      image: product.image ?? "",
     });
     // Reset dialog state
     setQty(1);
@@ -89,11 +89,20 @@ export function AddToCartDialog({
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-xl font-extrabold text-honey-dark flex items-center gap-2">
-            <img
-              src={product.image}
-              alt={product.name}
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            {product.image ? (
+              <img
+                src={product.image}
+                alt={product.name}
+                className="w-10 h-10 rounded-full object-cover"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="w-10 h-10 rounded-full bg-honey-light/40 flex items-center justify-center text-honey-dark text-lg font-extrabold"
+              >
+                {product.name?.charAt(0) || "ع"}
+              </span>
+            )}
             {product.name}
           </DialogTitle>
           <DialogDescription className="text-right">

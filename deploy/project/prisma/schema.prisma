@@ -130,6 +130,21 @@ model OrderItem {
   order         Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
+// Blog posts (وبلاگ)
+model BlogPost {
+  id          String    @id @default(cuid())
+  title       String    // عنوان
+  slug        String    @unique // اسلاگ انگلیسی برای URL
+  excerpt     String    @default("") // خلاصه کوتاه برای کارت لیست
+  content     String    // متن کامل (Markdown)
+  coverImage  String?   // تصویر شاخب (مسیر یا data URL)
+  tags        String    @default("") // تگ‌ها جدا شده با کاما
+  published   Boolean   @default(false) // منتشر شده یا پیش‌نویس
+  views       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
 // Agent payments — track financial transactions for agents
 // (commissions earned, payments sent to agent, etc.)
 model AgentPayment {

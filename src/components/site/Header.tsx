@@ -1,11 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
-import { useNav, useCart } from "@/lib/store";
+import { useNav, useCart, type ViewName } from "@/lib/store";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
-import { Menu, ShoppingBasket, UserCircle, ShieldCheck } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetTrigger,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Menu, ShoppingBasket, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toPersianDigits } from "@/lib/format";
 import Image from "next/image";
@@ -14,6 +18,7 @@ const NAV_ITEMS = [
   { key: "home", label: "خانه" },
   { key: "products", label: "محصولات" },
   { key: "benefits", label: "خواص عسل" },
+  { key: "blog", label: "وبلاگ" },
   { key: "about", label: "درباره ما" },
   { key: "track", label: "پیگیری سفارش" },
   { key: "contact", label: "تماس با ما" },
@@ -27,12 +32,13 @@ export function Header() {
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
-    window.addEventListener("scroll", onScroll);
+    window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  const go = (v: typeof NAV_ITEMS[number]["key"]) => {
-    navigate(v);
+  const go = (v: ViewName) => {
+    // Navigating to a main section always resets any selected item (e.g. blog post slug)
+    navigate(v, null);
     setOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -42,8 +48,8 @@ export function Header() {
       className={cn(
         "sticky top-0 z-50 w-full transition-all duration-300",
         scrolled
-          ? "bg-background/90 backdrop-blur-md shadow-md border-b border-border/60"
-          : "bg-background/70 backdrop-blur-sm"
+          ? "glass shadow-md border-b border-border/60"
+          : "bg-background/70 backdrop-blur-sm border-b border-transparent"
       )}
     >
       <div className="container mx-auto px-4">
@@ -75,53 +81,38 @@ export function Header() {
           </button>
 
           {/* Desktop nav */}
-          <nav className="hidden md:flex items-center gap-1">
+          <nav
+            className="hidden lg:flex items-center gap-1"
+            aria-label="منوی اصلی"
+          >
             {NAV_ITEMS.map((item) => (
-              <Button
+              <button
                 key={item.key}
-                variant={view === item.key ? "default" : "ghost"}
-                size="sm"
                 onClick={() => go(item.key)}
                 className={cn(
-                  "text-base font-medium transition-all",
+                  "relative px-3.5 py-2 rounded-full text-[15px] font-medium transition-all duration-300 cursor-pointer",
                   view === item.key
                     ? "bg-honey-gradient text-primary-foreground shadow-md"
-                    : "hover:bg-accent hover:text-accent-foreground"
+                    : "text-foreground/80 hover:text-honey-dark hover:bg-honey-light/20"
                 )}
               >
                 {item.label}
-              </Button>
+              </button>
             ))}
           </nav>
 
-          {/* Cart + Panel links + mobile menu */}
+          {/* Cart + mobile menu */}
           <div className="flex items-center gap-2">
-            {/* Agent panel link */}
-            <Link
-              href="/agent"
-              className="hidden sm:flex items-center gap-1.5 px-3 h-11 rounded-full border border-honey/30 text-honey-dark hover:bg-honey/10 hover:border-honey/50 transition-all text-sm font-medium"
-              title="پنل نمایندگان فروش"
-            >
-              <UserCircle className="w-4 h-4" />
-              <span>پنل نماینده</span>
-            </Link>
-
-            {/* Admin panel link */}
-            <Link
-              href="/admin"
-              className="hidden sm:flex items-center gap-1.5 px-3 h-11 rounded-full border border-honey/30 text-honey-dark hover:bg-honey/10 hover:border-honey/50 transition-all text-sm font-medium"
-              title="پنل مدیریت"
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span>پنل مدیریت</span>
-            </Link>
-
             <Button
               onClick={() => go("cart")}
               variant={view === "cart" ? "default" : "outline"}
               size="icon"
-              className="relative w-11 h-11 rounded-full shrink-0"
-              aria-label="سبد خرید"
+              className={cn(
+                "relative w-11 h-11 rounded-full shrink-0 transition-all",
+                view === "cart" && "bg-honey-gradient",
+                view !== "cart" && "hover:border-honey/50 hover:bg-honey-light/20"
+              )}
+              aria-label={`سبد خرید${totalCount > 0 ? ` — ${toPersianDigits(totalCount)} قلم کالا` : " (خالی)"}`}
             >
               <ShoppingBasket className="w-5 h-5" />
               {totalCount > 0 && (
@@ -137,7 +128,7 @@ export function Header() {
                 <Button
                   variant="outline"
                   size="icon"
-                  className="md:hidden w-11 h-11 rounded-full"
+                  className="lg:hidden w-11 h-11 rounded-full hover:border-honey/50 hover:bg-honey-light/20"
                   aria-label="منو"
                 >
                   <Menu className="w-5 h-5" />
@@ -145,7 +136,7 @@ export function Header() {
               </SheetTrigger>
               <SheetContent side="right" className="w-72 p-0">
                 <SheetTitle className="sr-only">منوی اصلی</SheetTitle>
-                <div className="flex flex-col gap-2 p-6 pt-8">
+                <div className="flex flex-col gap-1.5 p-6 pt-8">
                   <div className="flex items-center gap-2 mb-4 pb-4 border-b">
                     <div className="relative w-11 h-11 shrink-0">
                       <Image
@@ -161,35 +152,22 @@ export function Header() {
                     </span>
                   </div>
                   {NAV_ITEMS.map((item) => (
-                    <Button
+                    <button
                       key={item.key}
-                      variant={view === item.key ? "default" : "ghost"}
                       onClick={() => go(item.key)}
                       className={cn(
-                        "justify-start text-base py-3 h-auto",
+                        "flex items-center gap-2.5 rounded-xl px-4 py-3 text-base font-medium transition-all cursor-pointer",
                         view === item.key
-                          ? "bg-honey-gradient text-primary-foreground"
-                          : ""
+                          ? "bg-honey-gradient text-primary-foreground shadow-md"
+                          : "hover:bg-honey-light/20 text-foreground/85"
                       )}
                     >
+                      {item.key === "blog" && (
+                        <BookOpen className="w-4 h-4 opacity-70" />
+                      )}
                       {item.label}
-                    </Button>
+                    </button>
                   ))}
-                  <div className="my-3 border-t" />
-                  <Link
-                    href="/agent"
-                    className="flex items-center gap-2 px-3 py-2.5 rounded-md hover:bg-accent text-sm font-medium text-honey-dark"
-                  >
-                    <UserCircle className="w-4 h-4" />
-                    پنل نماینده
-                  </Link>
-                  <Link
-                    href="/admin"
-                    className="flex items-center gap-2 px-3 py-2.5 rounded-md hover:bg-accent text-sm font-medium text-honey-dark"
-                  >
-                    <ShieldCheck className="w-4 h-4" />
-                    پنل مدیریت
-                  </Link>
                 </div>
               </SheetContent>
             </Sheet>

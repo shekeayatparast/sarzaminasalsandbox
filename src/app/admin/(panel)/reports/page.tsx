@@ -133,11 +133,17 @@ export default async function AdminReportsPage({
           hint={`${toPersianDigits(stats.periodOrders)} سفارش در دوره • ${toPersianDigits(stats.totalOrders)} سفارش کل`}
         />
         <StatCard
-          title="پورسانت پرداختی"
-          value={formatToman(stats.totalCommissionPaid)}
+          title="سهم فروش نماینده‌ها"
+          value={formatToman(stats.agentRevenue)}
           icon={Wallet}
           iconClassName="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300"
-          hint="مجموع پورسانت نماینده‌ها"
+          hint={
+            totalRevenue > 0
+              ? `${toPersianDigits(
+                  Math.round((stats.agentRevenue / totalRevenue) * 100)
+                )}٪ از کل درآمد`
+              : "—"
+          }
         />
       </div>
 

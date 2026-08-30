@@ -37,6 +37,7 @@ import {
   Clock,
   ShieldAlert,
   CheckCircle2,
+  Receipt,
 } from "lucide-react";
 import {
   toPersianDigits,
@@ -170,7 +171,6 @@ export default async function AdminAgentDetailsPage({ params }: PageProps) {
               id: agent.id,
               name: agent.name,
               status: agent.status,
-              commissionRate: agent.commissionRate,
             }}
           />
         </div>
@@ -197,9 +197,13 @@ export default async function AdminAgentDetailsPage({ params }: PageProps) {
           color="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300"
         />
         <MiniStat
-          icon={<PercentIcon />}
-          label="نرخ پورسانت"
-          value={`${toPersianDigits(agent.commissionRate)}٪`}
+          icon={<Receipt className="w-5 h-5" />}
+          label="میانگین ارزش سفارش"
+          value={
+            agent.totalOrders > 0
+              ? formatToman(Math.round(agent.totalSales / agent.totalOrders))
+              : "—"
+          }
           color="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300"
         />
       </div>
@@ -281,16 +285,6 @@ export default async function AdminAgentDetailsPage({ params }: PageProps) {
               value={formatToman(agent.balance)}
               positive
             />
-            <FinancialRow
-              label="نرخ پورسانت"
-              value={`${toPersianDigits(agent.commissionRate)}٪`}
-            />
-            <FinancialRow
-              label="پورسانت تقریبی"
-              value={formatToman(
-                Math.round((agent.totalSales * agent.commissionRate) / 100)
-              )}
-            />
             <Separator />
             <FinancialRow
               label="تعداد سفارش"
@@ -329,7 +323,7 @@ export default async function AdminAgentDetailsPage({ params }: PageProps) {
             تاریخچه تراکنش‌ها
           </CardTitle>
           <CardDescription>
-            {toPersianDigits(agent.payments.length)} تراکنش اخیر (پورسانت/پرداخت)
+            {toPersianDigits(agent.payments.length)} تراکنش اخیر
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0">
@@ -355,7 +349,6 @@ export default async function AdminAgentDetailsPage({ params }: PageProps) {
                   {agent.payments.map((p) => {
                     const isCredit = p.amount >= 0;
                     const typeLabel: Record<string, string> = {
-                      commission: "پورسانت",
                       payment_out: "پرداخت به نماینده",
                       adjustment: "تعدیل",
                       bonus: "پاداش",
@@ -374,7 +367,7 @@ export default async function AdminAgentDetailsPage({ params }: PageProps) {
                                 : "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
                             }
                           >
-                            {typeLabel[p.type] || p.type}
+                            {typeLabel[p.type] || "تراکنش"}
                           </Badge>
                         </TableCell>
                         <TableCell
@@ -475,26 +468,5 @@ function FinancialRow({
         {value}
       </span>
     </div>
-  );
-}
-
-function PercentIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="w-5 h-5"
-    >
-      <line x1="19" y1="5" x2="5" y2="19" />
-      <circle cx="6.5" cy="6.5" r="2.5" />
-      <circle cx="17.5" cy="17.5" r="2.5" />
-    </svg>
   );
 }

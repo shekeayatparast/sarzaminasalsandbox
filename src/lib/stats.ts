@@ -56,9 +56,7 @@ export interface AgentStats {
   // Summary
   totalOrders: number;
   totalSales: number; // toman
-  totalCommission: number; // toman (calculated from commission rate)
   balance: number;
-  commissionRate: number;
   pendingOrders: number;
   // This period
   thisWeekSales: number;
@@ -86,7 +84,6 @@ export async function computeAgentStats(agentId: string): Promise<AgentStats> {
     where: { id: agentId },
     select: {
       id: true,
-      commissionRate: true,
       balance: true,
       totalSales: true,
       totalOrders: true,
@@ -122,7 +119,6 @@ export async function computeAgentStats(agentId: string): Promise<AgentStats> {
     (sum, o) => sum + (o.paymentStatus === "confirmed" ? o.finalAmount : 0),
     0
   );
-  const totalCommission = Math.round((totalSales * agent.commissionRate) / 100);
   const pendingOrders = orders.filter(
     (o) =>
       o.orderStatus === "awaiting_payment" || o.orderStatus === "paid"
@@ -293,9 +289,7 @@ export async function computeAgentStats(agentId: string): Promise<AgentStats> {
   return {
     totalOrders,
     totalSales,
-    totalCommission,
     balance: agent.balance,
-    commissionRate: agent.commissionRate,
     pendingOrders,
     thisWeekSales,
     thisMonthSales,
@@ -322,7 +316,6 @@ export interface AdminStats {
   totalRevenue: number; // revenue in selected period (confirmed)
   agentRevenue: number; // agent revenue in selected period
   customerRevenue: number; // customer revenue in selected period
-  totalCommissionPaid: number;
   // This period snapshots (always "this week" / "this month", regardless of period filter)
   thisWeekRevenue: number;
   thisMonthRevenue: number;
@@ -389,7 +382,6 @@ export async function computeAdminStats(
       storeName: true,
       phone: true,
       status: true,
-      commissionRate: true,
       balance: true,
       totalSales: true,
       totalOrders: true,
@@ -420,12 +412,6 @@ export async function computeAdminStats(
   const totalOrders = orders.length;
   const agentOrders = orders.filter((o) => o.orderType === "agent").length;
   const customerOrders = orders.filter((o) => o.orderType === "customer").length;
-
-  // Commission paid (lifetime — based on agent's stored totalSales)
-  const totalCommissionPaid = agents.reduce(
-    (s, a) => s + Math.round((a.totalSales * a.commissionRate) / 100),
-    0
-  );
 
   // Period filter — affects revenue totals, top products, top agents,
   // status distribution. Snapshot stats (thisWeek/Month) stay lifetime.
@@ -760,7 +746,6 @@ export async function computeAdminStats(
     totalRevenue,
     agentRevenue,
     customerRevenue,
-    totalCommissionPaid,
     thisWeekRevenue,
     thisMonthRevenue,
     weekGrowthPct,

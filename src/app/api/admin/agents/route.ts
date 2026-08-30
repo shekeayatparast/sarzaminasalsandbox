@@ -44,7 +44,6 @@ export async function GET(req: NextRequest) {
         address: true,
         nationalId: true,
         status: true,
-        commissionRate: true,
         balance: true,
         totalSales: true,
         totalOrders: true,
